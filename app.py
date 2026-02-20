@@ -366,14 +366,27 @@ def search_view():
     query = request.args.get("q", "").strip()
     fuzzy = request.args.get("fuzzy", "").lower() in ("1", "true", "on")
     host_id = request.args.get("host")
+    msg_type = request.args.get("type")  # "user", "assistant", or None (both)
+    if msg_type not in ("user", "assistant"):
+        msg_type = None
     results = []
+    grouped_results = []
     if query:
-        results = archive.search(query, host_id=host_id, fuzzy=fuzzy)
+        results = archive.search(query, host_id=host_id, fuzzy=fuzzy, message_type=msg_type)
+        # Group results by project, preserving overall relevance order
+        from collections import OrderedDict
+        groups: OrderedDict[str, list] = OrderedDict()
+        for r in results:
+            key = r.get("project_display") or "Unknown"
+            groups.setdefault(key, []).append(r)
+        grouped_results = [{"project": k, "hits": v} for k, v in groups.items()]
     projects = archive.list_projects(host_id=host_id)
     hosts = archive.list_hosts()
     stats = archive.get_stats(host_id=host_id)
     return render_template("search.html", projects=projects, query=query,
-                           results=results, stats=stats, fuzzy=fuzzy,
+                           results=results, grouped_results=grouped_results,
+                           stats=stats, fuzzy=fuzzy,
+                           msg_type=msg_type,
                            hosts=hosts, current_host=host_id)
 
 

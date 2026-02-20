@@ -181,16 +181,27 @@ class ArchiveBridge:
         project: str | None = None,
         limit: int = 50,
         fuzzy: bool = False,
+        message_type: str | None = None,
     ) -> list[dict]:
         """Full-text search via Tantivy (with SQLite FTS5 fallback)."""
         results = self.manager.search(
             query, host_id=host_id, project=project, limit=limit, fuzzy=fuzzy,
+            message_type=message_type,
         )
+        # Build session_id → display_name lookup from SQLite so search
+        # grouping always matches the sidebar, regardless of stale Tantivy data.
+        session_to_display: dict[str, str] = {}
+        if self.manager.sqlite:
+            conn = self.manager.sqlite._ensure_conn()
+            for row in conn.execute(
+                "SELECT s.session_id, p.display_name FROM sessions s JOIN projects p ON s.project_id = p.id"
+            ).fetchall():
+                session_to_display[row["session_id"]] = row["display_name"]
+
         # Map to the format templates expect
         return [
             {
-                "project": r.get("session_id", "")[:8],  # not used directly
-                "project_display": r.get("project_display", r.get("project_path", "")),
+                "project_display": session_to_display.get(r.get("session_id", ""), r.get("project_display", "")),
                 "session_id": r.get("session_id", ""),
                 "msg_type": r.get("message_type", ""),
                 "timestamp": r.get("timestamp", ""),

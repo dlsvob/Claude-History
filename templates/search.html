@@ -6,39 +6,48 @@
 <div class="flex-1 overflow-y-auto p-8">
     <h2 class="text-xl font-bold mb-4 text-claude-accent">
         {% if query %}
-        Search results for "{{ query }}"{% if fuzzy %} <span class="text-sm text-claude-muted">(fuzzy)</span>{% endif %}
+        Search results for "{{ query }}"{% if fuzzy %} <span class="text-sm text-claude-muted">(fuzzy)</span>{% endif %}{% if msg_type %} <span class="text-sm text-claude-muted">[{{ msg_type }}]</span>{% endif %}
         {% else %}
         Search
         {% endif %}
     </h2>
 
     {% if query %}
-    <p class="text-sm text-claude-muted mb-6">{{ results|length }} results found</p>
+    <p class="text-sm text-claude-muted mb-6">{{ results|length }} results across {{ grouped_results|length }} project{{ 's' if grouped_results|length != 1 }}</p>
 
-    <div class="space-y-3">
-        {% for r in results %}
-        <a href="/session/{{ r.session_id }}#{{ r.uuid }}"
-           class="block bg-claude-card rounded-lg p-4 border border-claude-border hover:border-claude-accent transition-colors">
-            <div class="flex items-center gap-3 mb-2">
-                <span class="text-xs px-2 py-0.5 rounded
-                    {% if r.msg_type == 'user' %}bg-blue-500/20 text-blue-300
-                    {% else %}bg-claude-accent/20 text-claude-accent{% endif %}">
-                    {{ r.msg_type }}
-                </span>
-                <span class="text-xs text-claude-muted">{{ r.project_display }}</span>
-                <span class="text-xs text-claude-muted opacity-60">{{ r.timestamp|fmt_ts }}</span>
-                <span class="text-xs text-claude-muted opacity-40 font-mono">{{ r.session_id[:8] }}</span>
-                {% if r.model %}
-                <span class="text-[10px] text-claude-muted/40">{{ r.model }}</span>
-                {% endif %}
-                {% if r.score %}
-                <span class="text-[10px] text-claude-yellow/60">score: {{ "%.1f"|format(r.score) }}</span>
-                {% endif %}
+    <div class="space-y-6">
+        {% for group in grouped_results %}
+        <details>
+            <summary class="cursor-pointer flex items-center gap-2 mb-2 select-none">
+                <span class="text-sm font-semibold text-claude-accent">{{ group.project }}</span>
+                <span class="text-xs text-claude-muted">({{ group.hits|length }})</span>
+            </summary>
+            <div class="space-y-2 ml-1 border-l-2 border-claude-border pl-4">
+                {% for r in group.hits %}
+                <a href="/session/{{ r.session_id }}#{{ r.uuid }}"
+                   class="block bg-claude-card rounded-lg p-3 border border-claude-border hover:border-claude-accent transition-colors">
+                    <div class="flex items-center gap-3 mb-1.5">
+                        <span class="text-xs px-2 py-0.5 rounded
+                            {% if r.msg_type == 'user' %}bg-blue-500/20 text-blue-300
+                            {% else %}bg-claude-accent/20 text-claude-accent{% endif %}">
+                            {{ r.msg_type }}
+                        </span>
+                        <span class="text-xs text-claude-muted opacity-60">{{ r.timestamp|fmt_ts }}</span>
+                        <span class="text-xs text-claude-muted opacity-40 font-mono">{{ r.session_id[:8] }}</span>
+                        {% if r.model %}
+                        <span class="text-[10px] text-claude-muted/40">{{ r.model }}</span>
+                        {% endif %}
+                        {% if r.score %}
+                        <span class="text-[10px] text-claude-yellow/60">score: {{ "%.1f"|format(r.score) }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="text-sm text-claude-text">
+                        {{ r.context }}
+                    </div>
+                </a>
+                {% endfor %}
             </div>
-            <div class="text-sm text-claude-text">
-                {{ r.context }}
-            </div>
-        </a>
+        </details>
         {% endfor %}
     </div>
 
@@ -46,7 +55,7 @@
     <div class="text-center text-claude-muted py-12">
         No results found for "{{ query }}"
         {% if not fuzzy %}
-        <br><span class="text-xs">Try enabling <a href="/search?q={{ query }}&fuzzy=1" class="text-claude-accent underline">fuzzy matching</a> for typo-tolerant search</span>
+        <br><span class="text-xs">Try enabling <a href="/search?q={{ query }}&fuzzy=1{% if msg_type %}&type={{ msg_type }}{% endif %}" class="text-claude-accent underline">fuzzy matching</a> for typo-tolerant search</span>
         {% endif %}
     </div>
     {% endif %}
