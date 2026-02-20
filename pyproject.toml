@@ -1,9 +1,13 @@
 [project]
 name = "claude-history"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Web-based conversation history browser powered by Claude Archive"
 requires-python = ">=3.12"
 dependencies = [
     "flask>=3.1.3",
     "python-docx>=1.2.0",
+    "claude-archive",
 ]
+
+[tool.uv.sources]
+claude-archive = { path = "../Claude-Archive" }

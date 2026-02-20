@@ -41,12 +41,36 @@
                 <a href="/" class="text-claude-accent font-bold text-lg hover:text-white transition-colors">Claude History</a>
             </div>
 
+            <!-- Host selector -->
+            {% if hosts and hosts|length > 1 %}
+            <div class="px-3 py-2 border-b border-claude-border">
+                <select onchange="window.location.href='/?host=' + this.value"
+                        class="w-full bg-claude-bg border border-claude-border rounded px-2 py-1 text-xs text-claude-muted focus:outline-none focus:border-claude-accent">
+                    <option value="" {% if not current_host %}selected{% endif %}>All hosts</option>
+                    {% for h in hosts %}
+                    <option value="{{ h.host_id }}" {% if current_host == h.host_id %}selected{% endif %}>
+                        {{ h.host_id }} ({{ h.session_count }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+
             <!-- Search -->
             <div class="p-3 border-b border-claude-border">
-                <form action="/search" method="get">
+                <form action="/search" method="get" class="space-y-1">
                     <input type="text" name="q" placeholder="Search conversations..."
                            value="{{ request.args.get('q', '') }}"
                            class="w-full bg-claude-bg border border-claude-border rounded px-3 py-1.5 text-sm text-claude-text placeholder-claude-muted focus:outline-none focus:border-claude-accent">
+                    {% if current_host %}
+                    <input type="hidden" name="host" value="{{ current_host }}">
+                    {% endif %}
+                    <label class="flex items-center gap-1.5 text-[10px] text-claude-muted cursor-pointer">
+                        <input type="checkbox" name="fuzzy" value="1"
+                               {% if request.args.get('fuzzy') %}checked{% endif %}
+                               class="accent-claude-accent w-3 h-3">
+                        <span>Fuzzy matching (typo tolerant)</span>
+                    </label>
                 </form>
             </div>
 
@@ -54,7 +78,7 @@
             <nav class="flex-1 overflow-y-auto p-2 space-y-1">
                 {% for proj in projects %}
                 <div class="project-group">
-                    <a href="/project/{{ proj.name }}"
+                    <a href="/project/{{ proj.name }}{% if current_host %}?host={{ current_host }}{% endif %}"
                        class="flex items-center justify-between px-3 py-2 rounded text-sm hover:bg-claude-card transition-colors
                               {% if selected_project and selected_project.name == proj.name %}bg-claude-card text-claude-accent{% else %}text-claude-muted{% endif %}">
                         <span class="truncate">{{ proj.display_name }}</span>
@@ -63,7 +87,7 @@
                     {% if selected_project and selected_project.name == proj.name %}
                     <div class="ml-3 mt-1 space-y-0.5">
                         {% for s in proj.sessions %}
-                        <a href="/session/{{ proj.name }}/{{ s.session_id }}"
+                        <a href="/session/{{ s.session_id }}{% if current_host %}?host={{ current_host }}{% endif %}"
                            class="block px-3 py-1.5 rounded text-xs hover:bg-claude-card transition-colors
                                   {% if session_id is defined and session_id == s.session_id %}bg-claude-card text-claude-blue{% else %}text-claude-muted{% endif %}">
                             <div class="truncate">{{ s.first_user_message or s.slug or s.session_id[:8] }}</div>

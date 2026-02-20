@@ -6,7 +6,7 @@
 <div class="flex-1 overflow-y-auto p-8">
     <h2 class="text-xl font-bold mb-4 text-claude-accent">
         {% if query %}
-        Search results for "{{ query }}"
+        Search results for "{{ query }}"{% if fuzzy %} <span class="text-sm text-claude-muted">(fuzzy)</span>{% endif %}
         {% else %}
         Search
         {% endif %}
@@ -17,7 +17,7 @@
 
     <div class="space-y-3">
         {% for r in results %}
-        <a href="/session/{{ r.project }}/{{ r.session_id }}#{{ r.uuid }}"
+        <a href="/session/{{ r.session_id }}#{{ r.uuid }}"
            class="block bg-claude-card rounded-lg p-4 border border-claude-border hover:border-claude-accent transition-colors">
             <div class="flex items-center gap-3 mb-2">
                 <span class="text-xs px-2 py-0.5 rounded
@@ -28,6 +28,12 @@
                 <span class="text-xs text-claude-muted">{{ r.project_display }}</span>
                 <span class="text-xs text-claude-muted opacity-60">{{ r.timestamp|fmt_ts }}</span>
                 <span class="text-xs text-claude-muted opacity-40 font-mono">{{ r.session_id[:8] }}</span>
+                {% if r.model %}
+                <span class="text-[10px] text-claude-muted/40">{{ r.model }}</span>
+                {% endif %}
+                {% if r.score %}
+                <span class="text-[10px] text-claude-yellow/60">score: {{ "%.1f"|format(r.score) }}</span>
+                {% endif %}
             </div>
             <div class="text-sm text-claude-text">
                 {{ r.context }}
@@ -39,12 +45,16 @@
     {% if not results %}
     <div class="text-center text-claude-muted py-12">
         No results found for "{{ query }}"
+        {% if not fuzzy %}
+        <br><span class="text-xs">Try enabling <a href="/search?q={{ query }}&fuzzy=1" class="text-claude-accent underline">fuzzy matching</a> for typo-tolerant search</span>
+        {% endif %}
     </div>
     {% endif %}
 
     {% else %}
     <div class="text-center text-claude-muted py-12">
         Enter a search term to search across all conversations.
+        <br><span class="text-xs mt-2 block">Powered by Tantivy full-text search with BM25 ranking</span>
     </div>
     {% endif %}
 </div>

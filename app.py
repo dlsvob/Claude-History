@@ -1,5 +1,6 @@
 """
 Claude History Browser — Flask web application
+Powered by Claude Archive search and storage backends.
 """
 
 import io
@@ -8,7 +9,7 @@ from flask import Flask, render_template, request, jsonify, send_file
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-import parser as p
+import bridge
 
 
 # --- Markdown-to-docx helpers ---
@@ -165,12 +166,16 @@ def _add_markdown_to_doc(doc, md_text):
         _add_inline_runs(para, line)
         i += 1
 
+
+# --- Flask app ---
+
 app = Flask(__name__)
+archive = bridge.ArchiveBridge()
 
 
 @app.template_filter("fmt_ts")
 def format_timestamp_filter(ts):
-    return p.format_timestamp(ts)
+    return bridge.format_timestamp(ts)
 
 
 @app.template_filter("short_id")
@@ -180,14 +185,19 @@ def short_id_filter(uuid_str):
 
 @app.route("/")
 def index():
-    projects = p.list_projects()
-    stats = p.get_stats()
-    return render_template("index.html", projects=projects, stats=stats)
+    host_id = request.args.get("host")
+    projects = archive.list_projects(host_id=host_id)
+    stats = archive.get_stats(host_id=host_id)
+    hosts = archive.list_hosts()
+    return render_template("index.html", projects=projects, stats=stats,
+                           hosts=hosts, current_host=host_id)
 
 
 @app.route("/project/<path:project_name>")
 def project_view(project_name):
-    projects = p.list_projects()
+    host_id = request.args.get("host")
+    projects = archive.list_projects(host_id=host_id)
+    hosts = archive.list_hosts()
     # Find the selected project
     selected = None
     for proj in projects:
@@ -196,26 +206,29 @@ def project_view(project_name):
             break
     if not selected:
         return "Project not found", 404
-    return render_template("index.html", projects=projects, selected_project=selected, stats=p.get_stats())
+    stats = archive.get_stats(host_id=host_id)
+    return render_template("index.html", projects=projects, selected_project=selected,
+                           stats=stats, hosts=hosts, current_host=host_id)
 
 
-@app.route("/session/<path:project_name>/<session_id>")
-def session_view(project_name, session_id):
-    projects = p.list_projects()
-    meta = p._get_session_meta_fast(project_name, session_id)
+@app.route("/session/<session_id>")
+def session_view(session_id):
+    host_id = request.args.get("host")
+    projects = archive.list_projects(host_id=host_id)
+    hosts = archive.list_hosts()
+    meta = archive.get_session_meta(session_id)
     if not meta:
         return "Session not found", 404
 
     # Get all turns once, then slice for display
-    all_turns = p.get_conversation_turns(project_name, session_id)
+    all_turns = archive.get_conversation_turns(meta.session_id)
     total_turns = len(all_turns)
     turns = all_turns[:100]
-    subagents = p.get_subagent_list(project_name, session_id)
 
     # Find the parent project so the sidebar expands
     selected_project = None
     for proj in projects:
-        if proj.name == project_name:
+        if proj.name == meta.project_name:
             selected_project = proj
             break
 
@@ -226,45 +239,40 @@ def session_view(project_name, session_id):
         meta=meta,
         turns=turns,
         total_turns=total_turns,
-        subagents=subagents,
-        project_name=project_name,
-        session_id=session_id,
+        subagents=[],  # Subagents are included in main message stream
+        session_id=meta.session_id,
+        hosts=hosts,
+        current_host=host_id,
     )
 
 
-@app.route("/api/session/<path:project_name>/<session_id>/turns")
-def api_session_turns(project_name, session_id):
+@app.route("/api/session/<session_id>/turns")
+def api_session_turns(session_id):
     offset = request.args.get("offset", 0, type=int)
     limit = request.args.get("limit", 100, type=int)
-    turns = p.get_conversation_turns(project_name, session_id, offset=offset, limit=limit)
+    turns = archive.get_conversation_turns(session_id, offset=offset, limit=limit)
     return jsonify(turns)
 
 
-@app.route("/api/subagent/<path:project_name>/<session_id>/<agent_id>")
-def api_subagent(project_name, session_id, agent_id):
-    turns = p.get_subagent_turns(project_name, session_id, agent_id)
-    return jsonify(turns)
-
-
-@app.route("/api/export/<path:project_name>/<session_id>", methods=["POST"])
-def api_export(project_name, session_id):
+@app.route("/api/export/<session_id>", methods=["POST"])
+def api_export(session_id):
     """Export selected turns as a Word document."""
     data = request.get_json()
     selected_indices = set(data.get("indices", []))
     include_tools = data.get("include_tools", False)
     include_thinking = data.get("include_thinking", False)
 
-    all_turns = p.get_conversation_turns(project_name, session_id)
-    meta = p._get_session_meta_fast(project_name, session_id)
+    all_turns = archive.get_conversation_turns(session_id)
+    meta = archive.get_session_meta(session_id)
 
     doc = Document()
 
     # Title
     title = doc.add_heading(meta.first_user_message or meta.slug or meta.session_id[:8], level=1)
     doc.add_paragraph(
-        f"Project: {p.get_display_name(project_name)}  |  "
+        f"Project: {meta.project_name}  |  "
         f"Session: {session_id[:8]}  |  "
-        f"{p.format_timestamp(meta.first_timestamp)} — {p.format_timestamp(meta.last_timestamp)}"
+        f"{bridge.format_timestamp(meta.first_timestamp)} — {bridge.format_timestamp(meta.last_timestamp)}"
     ).style = doc.styles["Subtitle"]
 
     for i, turn in enumerate(all_turns):
@@ -276,7 +284,7 @@ def api_export(project_name, session_id):
             heading = doc.add_heading("You", level=2)
             for run in heading.runs:
                 run.font.color.rgb = RGBColor(0x3B, 0x82, 0xF6)
-            ts_para = doc.add_paragraph(p.format_timestamp(turn["timestamp"]))
+            ts_para = doc.add_paragraph(bridge.format_timestamp(turn["timestamp"]))
             ts_para.runs[0].font.size = Pt(8)
             ts_para.runs[0].font.color.rgb = RGBColor(0x99, 0x99, 0x99)
             # User text
@@ -286,7 +294,7 @@ def api_export(project_name, session_id):
             heading = doc.add_heading("Claude", level=2)
             for run in heading.runs:
                 run.font.color.rgb = RGBColor(0xD4, 0xA5, 0x74)
-            ts_para = doc.add_paragraph(p.format_timestamp(turn["timestamp"]))
+            ts_para = doc.add_paragraph(bridge.format_timestamp(turn["timestamp"]))
             ts_para.runs[0].font.size = Pt(8)
             ts_para.runs[0].font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 
@@ -356,11 +364,17 @@ def api_export(project_name, session_id):
 @app.route("/search")
 def search_view():
     query = request.args.get("q", "").strip()
+    fuzzy = request.args.get("fuzzy", "").lower() in ("1", "true", "on")
+    host_id = request.args.get("host")
     results = []
     if query:
-        results = p.search_sessions(query)
-    projects = p.list_projects()
-    return render_template("search.html", projects=projects, query=query, results=results, stats=p.get_stats())
+        results = archive.search(query, host_id=host_id, fuzzy=fuzzy)
+    projects = archive.list_projects(host_id=host_id)
+    hosts = archive.list_hosts()
+    stats = archive.get_stats(host_id=host_id)
+    return render_template("search.html", projects=projects, query=query,
+                           results=results, stats=stats, fuzzy=fuzzy,
+                           hosts=hosts, current_host=host_id)
 
 
 if __name__ == "__main__":

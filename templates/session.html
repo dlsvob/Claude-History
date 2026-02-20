@@ -17,8 +17,11 @@
                 {% if meta.model %}
                 <span class="bg-claude-bg px-2 py-0.5 rounded">{{ meta.model }}</span>
                 {% endif %}
-                <span>{{ meta.message_count }} events</span>
+                <span>{{ meta.message_count }} msgs</span>
                 <span>{{ total_turns }} exchanges</span>
+                {% if meta.total_output_tokens %}
+                <span class="text-claude-purple">{{ "{:,}".format(meta.total_output_tokens) }} tokens out</span>
+                {% endif %}
             </div>
         </div>
         <div class="flex items-center gap-2">
@@ -208,14 +211,13 @@
 {% endif %}
 
 <script>
-const projectName = "{{ project_name }}";
 const sessionId = "{{ session_id }}";
 let currentOffset = {{ turns|length }};
 const totalTurns = {{ total_turns }};
 let nextTurnIndex = {{ turns|length }};
 
 function loadMore() {
-    fetch(`/api/session/${projectName}/${sessionId}/turns?offset=${currentOffset}&limit=100`)
+    fetch(`/api/session/${sessionId}/turns?offset=${currentOffset}&limit=100`)
         .then(r => r.json())
         .then(turns => {
             const conv = document.getElementById('conversation');
@@ -440,7 +442,7 @@ function exportSelected() {
     exportBtn.textContent = 'Exporting...';
     exportBtn.disabled = true;
 
-    fetch(`/api/export/${projectName}/${sessionId}`, {
+    fetch(`/api/export/${sessionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
