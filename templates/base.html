@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Claude History Browser{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="/static/app.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'claude-bg': '#0f1117',
+                        'claude-sidebar': '#161822',
+                        'claude-card': '#1c1f2e',
+                        'claude-border': '#2a2d3e',
+                        'claude-text': '#e2e4ed',
+                        'claude-muted': '#8b8fa3',
+                        'claude-accent': '#d4a574',
+                        'claude-blue': '#6b9eff',
+                        'claude-green': '#7dd3a8',
+                        'claude-red': '#f87171',
+                        'claude-purple': '#b48eff',
+                        'claude-yellow': '#fbbf24',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="h-full bg-claude-bg text-claude-text font-mono">
+    <div class="flex h-full">
+        <!-- Sidebar -->
+        <aside class="w-72 bg-claude-sidebar border-r border-claude-border flex flex-col shrink-0 overflow-hidden">
+            <!-- Logo -->
+            <div class="p-4 border-b border-claude-border">
+                <a href="/" class="text-claude-accent font-bold text-lg hover:text-white transition-colors">Claude History</a>
+            </div>
+
+            <!-- Search -->
+            <div class="p-3 border-b border-claude-border">
+                <form action="/search" method="get">
+                    <input type="text" name="q" placeholder="Search conversations..."
+                           value="{{ request.args.get('q', '') }}"
+                           class="w-full bg-claude-bg border border-claude-border rounded px-3 py-1.5 text-sm text-claude-text placeholder-claude-muted focus:outline-none focus:border-claude-accent">
+                </form>
+            </div>
+
+            <!-- Project list -->
+            <nav class="flex-1 overflow-y-auto p-2 space-y-1">
+                {% for proj in projects %}
+                <div class="project-group">
+                    <a href="/project/{{ proj.name }}"
+                       class="flex items-center justify-between px-3 py-2 rounded text-sm hover:bg-claude-card transition-colors
+                              {% if selected_project and selected_project.name == proj.name %}bg-claude-card text-claude-accent{% else %}text-claude-muted{% endif %}">
+                        <span class="truncate">{{ proj.display_name }}</span>
+                        <span class="text-xs opacity-60">{{ proj.session_count }}</span>
+                    </a>
+                    {% if selected_project and selected_project.name == proj.name %}
+                    <div class="ml-3 mt-1 space-y-0.5">
+                        {% for s in proj.sessions %}
+                        <a href="/session/{{ proj.name }}/{{ s.session_id }}"
+                           class="block px-3 py-1.5 rounded text-xs hover:bg-claude-card transition-colors
+                                  {% if session_id is defined and session_id == s.session_id %}bg-claude-card text-claude-blue{% else %}text-claude-muted{% endif %}">
+                            <div class="truncate">{{ s.first_user_message or s.slug or s.session_id[:8] }}</div>
+                            <div class="text-[10px] opacity-50 mt-0.5">{{ s.last_timestamp|fmt_ts }}</div>
+                        </a>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </nav>
+        </aside>
+
+        <!-- Main content -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

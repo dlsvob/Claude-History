@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Claude History Browser{% endblock %}
+
+{% block content %}
+<div class="flex-1 overflow-y-auto p-8">
+    <!-- Stats bar -->
+    {% if stats %}
+    <div class="grid grid-cols-4 gap-4 mb-8">
+        <div class="bg-claude-card rounded-lg p-4 border border-claude-border">
+            <div class="text-claude-muted text-xs uppercase tracking-wider mb-1">Sessions</div>
+            <div class="text-2xl font-bold text-claude-accent">{{ stats.get('totalSessions', 0) }}</div>
+        </div>
+        <div class="bg-claude-card rounded-lg p-4 border border-claude-border">
+            <div class="text-claude-muted text-xs uppercase tracking-wider mb-1">Messages</div>
+            <div class="text-2xl font-bold text-claude-blue">{{ "{:,}".format(stats.get('totalMessages', 0)) }}</div>
+        </div>
+        <div class="bg-claude-card rounded-lg p-4 border border-claude-border">
+            <div class="text-claude-muted text-xs uppercase tracking-wider mb-1">Projects</div>
+            <div class="text-2xl font-bold text-claude-green">{{ projects|length }}</div>
+        </div>
+        {% set model_usage = stats.get('modelUsage', {}) %}
+        {% set total_tokens = 0 %}
+        {% for m, u in model_usage.items() %}
+            {% set total_tokens = total_tokens + u.get('outputTokens', 0) %}
+        {% endfor %}
+        <div class="bg-claude-card rounded-lg p-4 border border-claude-border">
+            <div class="text-claude-muted text-xs uppercase tracking-wider mb-1">Output Tokens</div>
+            <div class="text-2xl font-bold text-claude-purple">{{ "{:,}".format(total_tokens) }}</div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if selected_project %}
+    <!-- Session list for selected project -->
+    <h2 class="text-xl font-bold mb-4 text-claude-accent">{{ selected_project.display_name }}</h2>
+    <p class="text-claude-muted text-sm mb-6">{{ selected_project.session_count }} sessions</p>
+
+    <div class="space-y-3">
+        {% for s in selected_project.sessions %}
+        <a href="/session/{{ selected_project.name }}/{{ s.session_id }}"
+           class="block bg-claude-card rounded-lg p-4 border border-claude-border hover:border-claude-accent transition-colors">
+            <div class="flex items-start justify-between">
+                <div class="flex-1 min-w-0">
+                    <div class="font-medium text-claude-text truncate">
+                        {{ s.first_user_message or s.slug or "Untitled session" }}
+                    </div>
+                    <div class="flex items-center gap-4 mt-2 text-xs text-claude-muted">
+                        <span>{{ s.first_timestamp|fmt_ts }}</span>
+                        {% if s.model %}
+                        <span class="bg-claude-bg px-2 py-0.5 rounded">{{ s.model }}</span>
+                        {% endif %}
+                        <span>{{ s.message_count }} events</span>
+                        {% if s.subagent_count %}
+                        <span class="text-claude-purple">{{ s.subagent_count }} subagents</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="text-xs text-claude-muted ml-4 shrink-0">
+                    {{ s.session_id[:8] }}
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+
+    {% else %}
+    <!-- All projects overview -->
+    <h2 class="text-xl font-bold mb-6 text-claude-accent">All Projects</h2>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for proj in projects %}
+        <a href="/project/{{ proj.name }}"
+           class="bg-claude-card rounded-lg p-5 border border-claude-border hover:border-claude-accent transition-colors">
+            <div class="font-medium text-claude-text mb-2">{{ proj.display_name }}</div>
+            <div class="text-sm text-claude-muted">{{ proj.session_count }} sessions</div>
+            {% if proj.sessions %}
+            <div class="text-xs text-claude-muted mt-2 opacity-60">
+                Last active: {{ proj.sessions[0].last_timestamp|fmt_ts }}
+            </div>
+            {% endif %}
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,475 @@
+{% extends "base.html" %}
+
+{% block title %}Session — Claude History Browser{% endblock %}
+
+{% block content %}
+<!-- Session header -->
+<div class="border-b border-claude-border p-4 bg-claude-sidebar shrink-0">
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="font-bold text-claude-text truncate max-w-2xl">
+                {{ meta.first_user_message or meta.slug or meta.session_id[:8] }}
+            </h1>
+            <div class="flex items-center gap-4 mt-1 text-xs text-claude-muted">
+                <span>{{ meta.first_timestamp|fmt_ts }}</span>
+                <span>→</span>
+                <span>{{ meta.last_timestamp|fmt_ts }}</span>
+                {% if meta.model %}
+                <span class="bg-claude-bg px-2 py-0.5 rounded">{{ meta.model }}</span>
+                {% endif %}
+                <span>{{ meta.message_count }} events</span>
+                <span>{{ total_turns }} exchanges</span>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            {% if subagents %}
+            <span class="text-xs text-claude-purple bg-claude-bg px-2 py-1 rounded">
+                {{ subagents|length }} subagents
+            </span>
+            {% endif %}
+            <span class="text-xs text-claude-muted bg-claude-bg px-2 py-1 rounded font-mono">
+                {{ meta.session_id[:8] }}
+            </span>
+            <button onclick="toggleSelectAll()" id="select-all-btn"
+                    class="text-xs text-claude-muted bg-claude-bg px-2 py-1 rounded border border-claude-border hover:border-claude-accent hover:text-claude-accent transition-colors">
+                Select All
+            </button>
+            <label class="text-xs text-claude-muted items-center gap-1 hidden" id="opt-tools">
+                <input type="checkbox" id="include-tools"> Tools
+            </label>
+            <label class="text-xs text-claude-muted items-center gap-1 hidden" id="opt-thinking">
+                <input type="checkbox" id="include-thinking"> Thinking
+            </label>
+            <button onclick="exportSelected()" id="export-btn"
+                    class="text-xs text-claude-bg bg-claude-accent px-3 py-1 rounded font-bold hover:bg-white transition-colors hidden">
+                Export .docx
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Conversation -->
+<div id="conversation" class="flex-1 overflow-y-auto p-6 space-y-6">
+    {% for turn in turns %}
+        {% if turn.type == "user" %}
+        <!-- User message -->
+        <details class="turn-block user-bubble rounded-lg">
+            <summary class="cursor-pointer px-4 py-2 flex items-center gap-2">
+                <input type="checkbox" class="turn-checkbox" data-turn-index="{{ loop.index0 }}" onclick="event.stopPropagation(); updateExportBtn()">
+                <span class="text-xs text-blue-300 font-bold">You</span>
+                <span class="text-xs text-blue-300/50">· {{ turn.timestamp|fmt_ts }}</span>
+                <span class="text-xs text-claude-muted truncate max-w-xl">{{ turn.text[:120] }}</span>
+            </summary>
+            <div class="px-4 pb-3">
+                <div class="text-sm whitespace-pre-wrap">{{ turn.text }}</div>
+            </div>
+        </details>
+
+        {% elif turn.type == "assistant" %}
+        <!-- Assistant response -->
+        <details class="turn-block assistant-bubble rounded-lg">
+            <summary class="cursor-pointer px-4 py-2 flex items-center gap-2">
+                <input type="checkbox" class="turn-checkbox" data-turn-index="{{ loop.index0 }}" onclick="event.stopPropagation(); updateExportBtn()">
+                <span class="text-xs text-claude-accent font-bold">Claude</span>
+                <span class="text-xs text-claude-muted/50">· {{ turn.timestamp|fmt_ts }}</span>
+                {% if turn.model %}
+                <span class="text-[10px] text-claude-muted/30">{{ turn.model }}</span>
+                {% endif %}
+                <span class="text-xs text-claude-muted truncate max-w-xl">{{ turn.text_blocks[0][:120] if turn.text_blocks else '' }}</span>
+                {% if turn.tool_calls %}
+                <span class="text-[10px] text-claude-blue/60">{{ turn.tool_calls|length }} tools</span>
+                {% endif %}
+            </summary>
+            <div class="px-4 pb-3">
+                <!-- Agent's text responses (the actual conversation) -->
+                {% for text in turn.text_blocks %}
+                <div class="assistant-text text-sm mb-3" data-markdown>{{ text }}</div>
+                {% endfor %}
+
+                <!-- Thinking blocks (collapsible) -->
+                {% if turn.thinking_blocks %}
+                <details class="thinking-block mb-3">
+                    <summary class="cursor-pointer text-xs text-claude-purple hover:text-claude-accent transition-colors py-1">
+                        Thinking ({{ turn.thinking_blocks|length }} blocks)
+                    </summary>
+                    <div class="mt-1 pl-3 border-l-2 border-claude-purple/30 space-y-1">
+                        {% for thought in turn.thinking_blocks %}
+                        <details class="leaf-block">
+                            <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Thought {{ loop.index }}</summary>
+                            <div class="text-xs text-claude-muted whitespace-pre-wrap max-h-64 overflow-y-auto mt-1">{{ thought }}</div>
+                        </details>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
+
+                <!-- Tool calls (collapsible) -->
+                {% if turn.tool_calls %}
+                <details class="tool-calls-group mb-2">
+                    <summary class="cursor-pointer text-xs text-claude-blue hover:text-claude-accent transition-colors py-1 flex items-center gap-2">
+                        <span>Tool calls ({{ turn.tool_calls|length }})</span>
+                        <span class="flex gap-1">
+                            {% set tool_names = [] %}
+                            {% for tc in turn.tool_calls %}
+                                {% if tc.tool_name not in tool_names %}
+                                    {% if tool_names.append(tc.tool_name) %}{% endif %}
+                                    <span class="tool-badge px-1.5 py-0 rounded text-[10px]">{{ tc.tool_name }}</span>
+                                {% endif %}
+                            {% endfor %}
+                        </span>
+                    </summary>
+                    <div class="mt-2 pl-3 border-l-2 border-claude-border space-y-2">
+                        {% for tc in turn.tool_calls %}
+                        <details class="tool-block">
+                            <summary class="cursor-pointer flex items-center gap-2 py-1 text-xs">
+                                <span class="tool-badge px-1.5 py-0.5 rounded font-bold">{{ tc.tool_name }}</span>
+                                {% if tc.tool_input.get('description') %}
+                                <span class="text-claude-muted truncate max-w-lg">{{ tc.tool_input.description }}</span>
+                                {% elif tc.tool_input.get('command') %}
+                                <span class="text-claude-muted font-mono truncate max-w-lg">{{ tc.tool_input.command[:100] }}</span>
+                                {% elif tc.tool_input.get('pattern') %}
+                                <span class="text-claude-muted font-mono truncate max-w-lg">{{ tc.tool_input.pattern }}</span>
+                                {% elif tc.tool_input.get('file_path') %}
+                                <span class="text-claude-muted font-mono truncate max-w-lg">{{ tc.tool_input.file_path }}</span>
+                                {% elif tc.tool_input.get('query') %}
+                                <span class="text-claude-muted truncate max-w-lg">{{ tc.tool_input.query }}</span>
+                                {% elif tc.tool_input.get('prompt') %}
+                                <span class="text-claude-muted truncate max-w-lg">{{ tc.tool_input.prompt[:80] }}</span>
+                                {% elif tc.tool_input.get('old_string') %}
+                                <span class="text-claude-muted font-mono truncate max-w-lg">{{ tc.tool_input.file_path or '' }}</span>
+                                {% endif %}
+                                {% if tc.tool_result %}
+                                    {% if tc.tool_result.is_error %}
+                                    <span class="text-claude-red">error</span>
+                                    {% else %}
+                                    <span class="text-claude-green">ok</span>
+                                    {% endif %}
+                                {% endif %}
+                            </summary>
+                            <div class="mt-1 pl-3 border-l border-claude-border/50 space-y-1">
+                                <details class="leaf-block">
+                                    <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Input</summary>
+                                    <pre class="bg-claude-bg rounded p-2 overflow-x-auto text-[11px] max-h-48 overflow-y-auto mt-1"><code class="language-json">{{ tc.tool_input | tojson(indent=2) }}</code></pre>
+                                </details>
+                                {% if tc.tool_result %}
+                                <details class="leaf-block">
+                                    <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Output{% if tc.tool_result.is_error %} <span class="text-claude-red">(error)</span>{% endif %}</summary>
+                                    <pre class="tool-output rounded p-2 overflow-x-auto text-[11px] max-h-64 overflow-y-auto mt-1 {% if tc.tool_result.is_error %}border-l-2 border-claude-red{% endif %}">{{ tc.tool_result.text }}</pre>
+                                </details>
+                                {% endif %}
+                            </div>
+                        </details>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
+
+                {% if not turn.text_blocks and not turn.thinking_blocks and not turn.tool_calls %}
+                <div class="text-xs text-claude-muted italic">(no visible content)</div>
+                {% endif %}
+            </div>
+        </details>
+        {% endif %}
+    {% endfor %}
+
+    {% if total_turns > turns|length %}
+    <div id="load-more" class="text-center py-4">
+        <button onclick="loadMore()" class="text-sm text-claude-accent hover:text-white transition-colors bg-claude-card px-4 py-2 rounded border border-claude-border">
+            Load more ({{ total_turns - turns|length }} remaining)
+        </button>
+    </div>
+    {% endif %}
+</div>
+
+{% if subagents %}
+<!-- Subagent panel (collapsible bottom bar) -->
+<div class="border-t border-claude-border bg-claude-sidebar shrink-0">
+    <details>
+        <summary class="cursor-pointer p-3 text-sm text-claude-purple hover:text-claude-accent transition-colors">
+            Subagents ({{ subagents|length }})
+        </summary>
+        <div class="p-3 pt-0 space-y-2 max-h-64 overflow-y-auto">
+            {% for agent in subagents %}
+            <div class="subagent-item bg-claude-card rounded p-3 border border-claude-border cursor-pointer"
+                 onclick="loadSubagent('{{ project_name }}', '{{ session_id }}', '{{ agent.agent_id }}', this)">
+                <div class="flex items-center justify-between">
+                    <div class="text-xs text-claude-purple font-bold">agent-{{ agent.agent_id }}</div>
+                    <div class="text-xs text-claude-muted">{{ agent.message_count }} events</div>
+                </div>
+                {% if agent.description %}
+                <div class="text-xs text-claude-muted mt-1 truncate">{{ agent.description }}</div>
+                {% endif %}
+                <div class="subagent-content hidden mt-3"></div>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+</div>
+{% endif %}
+
+<script>
+const projectName = "{{ project_name }}";
+const sessionId = "{{ session_id }}";
+let currentOffset = {{ turns|length }};
+const totalTurns = {{ total_turns }};
+let nextTurnIndex = {{ turns|length }};
+
+function loadMore() {
+    fetch(`/api/session/${projectName}/${sessionId}/turns?offset=${currentOffset}&limit=100`)
+        .then(r => r.json())
+        .then(turns => {
+            const conv = document.getElementById('conversation');
+            const loadMore = document.getElementById('load-more');
+
+            turns.forEach(turn => {
+                conv.insertBefore(createTurnElement(turn), loadMore);
+            });
+
+            currentOffset += turns.length;
+            if (currentOffset >= totalTurns) {
+                loadMore.remove();
+            } else {
+                loadMore.querySelector('button').textContent =
+                    `Load more (${totalTurns - currentOffset} remaining)`;
+            }
+
+            renderMarkdown();
+            hljs.highlightAll();
+        });
+}
+
+function loadSubagent(project, session, agentId, el) {
+    const content = el.querySelector('.subagent-content');
+    if (content.classList.contains('loaded')) {
+        content.classList.toggle('hidden');
+        return;
+    }
+
+    content.innerHTML = '<div class="text-xs text-claude-muted">Loading...</div>';
+    content.classList.remove('hidden');
+
+    fetch(`/api/subagent/${project}/${session}/${agentId}`)
+        .then(r => r.json())
+        .then(turns => {
+            content.innerHTML = '';
+            content.classList.add('loaded');
+
+            turns.forEach(turn => {
+                content.appendChild(createTurnElement(turn, true));
+            });
+
+            renderMarkdown();
+            hljs.highlightAll();
+        });
+}
+
+function createTurnElement(turn, isSubagent = false) {
+    const div = document.createElement('div');
+    div.className = 'flex justify-start' + (isSubagent ? ' ml-4' : '');
+    const idx = nextTurnIndex++;
+    const checkbox = isSubagent ? '' : `<input type="checkbox" class="turn-checkbox" data-turn-index="${idx}" onclick="event.stopPropagation(); updateExportBtn()">`;
+
+    if (turn.type === 'user') {
+        const preview = escapeHtml((turn.text || '').slice(0, 120));
+        div.innerHTML = `
+            <details class="turn-block user-bubble rounded-lg w-full">
+                <summary class="cursor-pointer px-4 py-2 flex items-center gap-2">
+                    ${checkbox}
+                    <span class="text-xs text-blue-300 font-bold">You</span>
+                    <span class="text-xs text-blue-300/50">· ${formatTimestamp(turn.timestamp)}</span>
+                    <span class="text-xs text-claude-muted truncate max-w-xl">${preview}</span>
+                </summary>
+                <div class="px-4 pb-3">
+                    <div class="text-sm whitespace-pre-wrap">${escapeHtml(turn.text)}</div>
+                </div>
+            </details>`;
+    } else if (turn.type === 'assistant') {
+        // Text blocks
+        let textHtml = (turn.text_blocks || [])
+            .map(t => `<div class="assistant-text text-sm mb-3" data-markdown>${escapeHtml(t)}</div>`)
+            .join('');
+
+        // Thinking blocks
+        let thinkingHtml = '';
+        if (turn.thinking_blocks && turn.thinking_blocks.length) {
+            const thoughts = turn.thinking_blocks.map((t, i) =>
+                `<details class="leaf-block">
+                    <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Thought ${i + 1}</summary>
+                    <div class="text-xs text-claude-muted whitespace-pre-wrap max-h-64 overflow-y-auto mt-1">${escapeHtml(t)}</div>
+                </details>`
+            ).join('');
+            thinkingHtml = `
+                <details class="thinking-block mb-3">
+                    <summary class="cursor-pointer text-xs text-claude-purple hover:text-claude-accent transition-colors py-1">
+                        Thinking (${turn.thinking_blocks.length} blocks)
+                    </summary>
+                    <div class="mt-1 pl-3 border-l-2 border-claude-purple/30 space-y-2">${thoughts}</div>
+                </details>`;
+        }
+
+        // Tool calls
+        let toolsHtml = '';
+        if (turn.tool_calls && turn.tool_calls.length) {
+            const toolItems = turn.tool_calls.map(tc => {
+                const desc = tc.tool_input.description || tc.tool_input.command?.slice(0, 100)
+                    || tc.tool_input.pattern || tc.tool_input.file_path || tc.tool_input.query
+                    || tc.tool_input.prompt?.slice(0, 80) || '';
+                const statusBadge = tc.tool_result
+                    ? (tc.tool_result.is_error
+                        ? '<span class="text-claude-red">error</span>'
+                        : '<span class="text-claude-green">ok</span>')
+                    : '';
+                const resultHtml = tc.tool_result
+                    ? `<details class="leaf-block">
+                        <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Output${tc.tool_result.is_error ? ' <span class="text-claude-red">(error)</span>' : ''}</summary>
+                        <pre class="tool-output rounded p-2 overflow-x-auto text-[11px] max-h-64 overflow-y-auto mt-1 ${tc.tool_result.is_error ? 'border-l-2 border-claude-red' : ''}">${escapeHtml(tc.tool_result.text)}</pre>
+                       </details>`
+                    : '';
+                const inputJson = JSON.stringify(tc.tool_input, null, 2);
+                return `
+                    <details class="tool-block">
+                        <summary class="cursor-pointer flex items-center gap-2 py-1 text-xs">
+                            <span class="tool-badge px-1.5 py-0.5 rounded font-bold">${escapeHtml(tc.tool_name)}</span>
+                            <span class="text-claude-muted truncate max-w-lg">${escapeHtml(desc)}</span>
+                            ${statusBadge}
+                        </summary>
+                        <div class="mt-1 pl-3 border-l border-claude-border/50 space-y-1">
+                            <details class="leaf-block">
+                                <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Input</summary>
+                                <pre class="bg-claude-bg rounded p-2 overflow-x-auto text-[11px] max-h-48 overflow-y-auto mt-1"><code class="language-json">${escapeHtml(inputJson)}</code></pre>
+                            </details>
+                            ${resultHtml}
+                        </div>
+                    </details>`;
+            }).join('');
+
+            // Unique tool names for badges
+            const uniqueTools = [...new Set(turn.tool_calls.map(tc => tc.tool_name))];
+            const badges = uniqueTools.map(n => `<span class="tool-badge px-1.5 py-0 rounded text-[10px]">${escapeHtml(n)}</span>`).join('');
+
+            toolsHtml = `
+                <details class="tool-calls-group mb-2">
+                    <summary class="cursor-pointer text-xs text-claude-blue hover:text-claude-accent transition-colors py-1 flex items-center gap-2">
+                        <span>Tool calls (${turn.tool_calls.length})</span>
+                        <span class="flex gap-1">${badges}</span>
+                    </summary>
+                    <div class="mt-2 pl-3 border-l-2 border-claude-border space-y-2">${toolItems}</div>
+                </details>`;
+        }
+
+        const textPreview = escapeHtml((turn.text_blocks && turn.text_blocks[0] || '').slice(0, 120));
+        const toolCount = turn.tool_calls && turn.tool_calls.length ? `<span class="text-[10px] text-claude-blue/60">${turn.tool_calls.length} tools</span>` : '';
+
+        div.innerHTML = `
+            <details class="turn-block assistant-bubble rounded-lg w-full">
+                <summary class="cursor-pointer px-4 py-2 flex items-center gap-2">
+                    ${checkbox}
+                    <span class="text-xs text-claude-accent font-bold">Claude</span>
+                    <span class="text-xs text-claude-muted/50">· ${formatTimestamp(turn.timestamp)}</span>
+                    <span class="text-xs text-claude-muted truncate max-w-xl">${textPreview}</span>
+                    ${toolCount}
+                </summary>
+                <div class="px-4 pb-3">
+                    ${textHtml}
+                    ${thinkingHtml}
+                    ${toolsHtml}
+                </div>
+            </details>`;
+    }
+
+    return div;
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatTimestamp(ts) {
+    if (!ts) return '';
+    try {
+        const d = new Date(ts);
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    } catch {
+        return ts.slice(0, 16);
+    }
+}
+
+// --- Export functionality ---
+
+function updateExportBtn() {
+    const checked = document.querySelectorAll('.turn-checkbox:checked');
+    const exportBtn = document.getElementById('export-btn');
+    const optTools = document.getElementById('opt-tools');
+    const optThinking = document.getElementById('opt-thinking');
+    if (checked.length > 0) {
+        exportBtn.classList.remove('hidden');
+        exportBtn.textContent = `Export .docx (${checked.length} selected)`;
+        optTools.classList.remove('hidden');
+        optTools.classList.add('flex');
+        optThinking.classList.remove('hidden');
+        optThinking.classList.add('flex');
+    } else {
+        exportBtn.classList.add('hidden');
+        optTools.classList.add('hidden');
+        optTools.classList.remove('flex');
+        optThinking.classList.add('hidden');
+        optThinking.classList.remove('flex');
+    }
+}
+
+function toggleSelectAll() {
+    const boxes = document.querySelectorAll('.turn-checkbox');
+    const allChecked = Array.from(boxes).every(cb => cb.checked);
+    boxes.forEach(cb => cb.checked = !allChecked);
+    const btn = document.getElementById('select-all-btn');
+    btn.textContent = allChecked ? 'Select All' : 'Deselect All';
+    updateExportBtn();
+}
+
+function exportSelected() {
+    const checked = document.querySelectorAll('.turn-checkbox:checked');
+    const indices = Array.from(checked).map(cb => parseInt(cb.dataset.turnIndex));
+    const includeTools = document.getElementById('include-tools').checked;
+    const includeThinking = document.getElementById('include-thinking').checked;
+
+    const exportBtn = document.getElementById('export-btn');
+    exportBtn.textContent = 'Exporting...';
+    exportBtn.disabled = true;
+
+    fetch(`/api/export/${projectName}/${sessionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            indices: indices,
+            include_tools: includeTools,
+            include_thinking: includeThinking
+        })
+    })
+    .then(resp => {
+        if (!resp.ok) throw new Error('Export failed');
+        return resp.blob();
+    })
+    .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `claude-history-${sessionId.slice(0, 8)}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    })
+    .catch(err => {
+        alert('Export failed: ' + err.message);
+    })
+    .finally(() => {
+        exportBtn.disabled = false;
+        updateExportBtn();
+    });
+}
+</script>
+{% endblock %}

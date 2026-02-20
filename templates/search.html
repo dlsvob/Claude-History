@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Search — Claude History Browser{% endblock %}
+
+{% block content %}
+<div class="flex-1 overflow-y-auto p-8">
+    <h2 class="text-xl font-bold mb-4 text-claude-accent">
+        {% if query %}
+        Search results for "{{ query }}"
+        {% else %}
+        Search
+        {% endif %}
+    </h2>
+
+    {% if query %}
+    <p class="text-sm text-claude-muted mb-6">{{ results|length }} results found</p>
+
+    <div class="space-y-3">
+        {% for r in results %}
+        <a href="/session/{{ r.project }}/{{ r.session_id }}#{{ r.uuid }}"
+           class="block bg-claude-card rounded-lg p-4 border border-claude-border hover:border-claude-accent transition-colors">
+            <div class="flex items-center gap-3 mb-2">
+                <span class="text-xs px-2 py-0.5 rounded
+                    {% if r.msg_type == 'user' %}bg-blue-500/20 text-blue-300
+                    {% else %}bg-claude-accent/20 text-claude-accent{% endif %}">
+                    {{ r.msg_type }}
+                </span>
+                <span class="text-xs text-claude-muted">{{ r.project_display }}</span>
+                <span class="text-xs text-claude-muted opacity-60">{{ r.timestamp|fmt_ts }}</span>
+                <span class="text-xs text-claude-muted opacity-40 font-mono">{{ r.session_id[:8] }}</span>
+            </div>
+            <div class="text-sm text-claude-text">
+                {{ r.context }}
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+
+    {% if not results %}
+    <div class="text-center text-claude-muted py-12">
+        No results found for "{{ query }}"
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="text-center text-claude-muted py-12">
+        Enter a search term to search across all conversations.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
