@@ -41,6 +41,18 @@
                 <a href="/" class="text-claude-accent font-bold text-lg hover:text-white transition-colors">Claude History</a>
             </div>
 
+            {% if is_viewer %}
+            <!-- Viewer banner -->
+            <div class="px-3 py-2 border-b border-claude-border bg-claude-accent/10">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-claude-accent">Your uploaded data</span>
+                    <form action="/disconnect" method="post" class="inline">
+                        <button type="submit" class="text-[10px] text-claude-muted hover:text-claude-red transition-colors">Disconnect</button>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
+
             <!-- Host selector -->
             {% if hosts and hosts|length > 1 %}
             <div class="px-3 py-2 border-b border-claude-border">
@@ -107,6 +119,15 @@
                 </div>
                 {% endfor %}
             </nav>
+
+            {% if not is_viewer %}
+            <!-- Upload link -->
+            <div class="p-3 border-t border-claude-border">
+                <a href="/welcome" class="block text-xs text-claude-muted hover:text-claude-accent transition-colors text-center">
+                    Browse your own history...
+                </a>
+            </div>
+            {% endif %}
         </aside>
 
         <!-- Main content -->

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.git/
+.claude/
+uv.lock
+*.pyc
+.gitignore
+.gcloudignore
+deploy.sh

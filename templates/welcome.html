@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude History Browser</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/app.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'claude-bg': '#0f1117',
+                        'claude-sidebar': '#161822',
+                        'claude-card': '#1c1f2e',
+                        'claude-border': '#2a2d3e',
+                        'claude-text': '#e2e4ed',
+                        'claude-muted': '#8b8fa3',
+                        'claude-accent': '#d4a574',
+                        'claude-blue': '#6b9eff',
+                        'claude-green': '#7dd3a8',
+                        'claude-red': '#f87171',
+                        'claude-purple': '#b48eff',
+                        'claude-yellow': '#fbbf24',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="h-full bg-claude-bg text-claude-text font-mono flex items-center justify-center">
+    <div class="max-w-lg w-full mx-4">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-claude-accent mb-2">Claude History Browser</h1>
+            <p class="text-claude-muted text-sm">Upload your Claude conversation history to browse, search, and export your sessions.</p>
+        </div>
+
+        {% if error %}
+        <div class="bg-claude-red/10 border border-claude-red/30 rounded-lg p-4 mb-6 text-claude-red text-sm">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <!-- Upload form -->
+        <div class="bg-claude-card border border-claude-border rounded-lg p-6 mb-4">
+            <h2 class="text-lg font-bold text-claude-text mb-1">Upload archive</h2>
+            <p class="text-claude-muted text-xs mb-4">Zip your <code class="text-claude-accent">~/.claude/</code> directory and upload it. Supports .zip and .tar.gz (max 200 MB).</p>
+            <form action="/upload" method="post" enctype="multipart/form-data" id="upload-form">
+                <label class="block w-full cursor-pointer border-2 border-dashed border-claude-border rounded-lg p-6 text-center hover:border-claude-accent transition-colors" id="drop-zone">
+                    <input type="file" name="archive" accept=".zip,.tar.gz,.tgz" required class="hidden" id="file-input">
+                    <div id="drop-label">
+                        <div class="text-claude-muted text-sm mb-1">Click to choose file or drag &amp; drop</div>
+                        <div class="text-claude-muted text-xs opacity-60">.zip or .tar.gz</div>
+                    </div>
+                    <div id="file-name" class="text-claude-accent text-sm hidden"></div>
+                </label>
+                <button type="submit" id="upload-btn"
+                        class="mt-4 w-full bg-claude-accent text-claude-bg font-bold py-2.5 px-4 rounded-lg hover:bg-claude-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        disabled>
+                    <span id="btn-text">Upload &amp; Browse</span>
+                    <span id="btn-loading" class="hidden">
+                        <svg class="animate-spin inline w-4 h-4 mr-2" viewBox="0 0 24 24" fill="none">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                        Processing...
+                    </span>
+                </button>
+            </form>
+        </div>
+
+        <!-- GCS form -->
+        <div class="bg-claude-card border border-claude-border rounded-lg p-6 mb-6">
+            <h2 class="text-lg font-bold text-claude-text mb-1">Connect GCS bucket</h2>
+            <p class="text-claude-muted text-xs mb-4">Provide a <code class="text-claude-accent">gs://</code> path to a <code class="text-claude-accent">.claude/</code> directory.</p>
+            <form action="/connect-gcs" method="post" id="gcs-form">
+                <input type="text" name="gcs_path" placeholder="gs://my-bucket/path/to/.claude"
+                       required pattern="gs://.*"
+                       class="w-full bg-claude-bg border border-claude-border rounded-lg px-4 py-2.5 text-sm text-claude-text placeholder-claude-muted focus:outline-none focus:border-claude-accent mb-4">
+                <button type="submit"
+                        class="w-full bg-claude-card border border-claude-accent text-claude-accent font-bold py-2.5 px-4 rounded-lg hover:bg-claude-accent hover:text-claude-bg transition-colors">
+                    Connect &amp; Browse
+                </button>
+            </form>
+        </div>
+
+        <p class="text-center text-claude-muted text-xs opacity-60">
+            Your data is stored temporarily and deleted after 1 hour of inactivity.
+        </p>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('file-input');
+        const fileName = document.getElementById('file-name');
+        const dropLabel = document.getElementById('drop-label');
+        const uploadBtn = document.getElementById('upload-btn');
+        const uploadForm = document.getElementById('upload-form');
+        const btnText = document.getElementById('btn-text');
+        const btnLoading = document.getElementById('btn-loading');
+
+        fileInput.addEventListener('change', function() {
+            if (this.files.length) {
+                fileName.textContent = this.files[0].name;
+                fileName.classList.remove('hidden');
+                dropLabel.classList.add('hidden');
+                uploadBtn.disabled = false;
+            }
+        });
+
+        uploadForm.addEventListener('submit', function() {
+            btnText.classList.add('hidden');
+            btnLoading.classList.remove('hidden');
+            uploadBtn.disabled = true;
+        });
+
+        // Drag & drop
+        const dropZone = document.getElementById('drop-zone');
+        ['dragenter', 'dragover'].forEach(e => {
+            dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.add('border-claude-accent'); });
+        });
+        ['dragleave', 'drop'].forEach(e => {
+            dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.remove('border-claude-accent'); });
+        });
+        dropZone.addEventListener('drop', function(ev) {
+            if (ev.dataTransfer.files.length) {
+                fileInput.files = ev.dataTransfer.files;
+                fileInput.dispatchEvent(new Event('change'));
+            }
+        });
+    </script>
+</body>
+</html>

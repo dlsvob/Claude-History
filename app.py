@@ -4,12 +4,19 @@ Powered by Claude Archive search and storage backends.
 """
 
 import io
+import os
 import re
-from flask import Flask, render_template, request, jsonify, send_file
+import secrets
+import threading
+import uuid
+from pathlib import Path
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, flash
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import bridge
+from session_manager import SessionManager
+from providers import UploadProvider, GCSBucketProvider, MAX_VIEWER_DISK
 
 
 # --- Markdown-to-docx helpers ---
@@ -170,7 +177,76 @@ def _add_markdown_to_doc(doc, md_text):
 # --- Flask app ---
 
 app = Flask(__name__)
-archive = bridge.ArchiveBridge()
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB upload limit
+
+# --- Session manager for multi-user viewer support ---
+_session_mgr = SessionManager()
+
+# Support custom data directories (e.g. GCS FUSE mount on Cloud Run)
+# CLAUDE_DATA_DIR  → raw JSONL sessions (mirrors ~/.claude/)
+# CLAUDE_ARCHIVE_DIR → SQLite DB + Tantivy index (mirrors ~/claude-archive/)
+_claude_data_dir = os.environ.get("CLAUDE_DATA_DIR")
+_claude_archive_dir = os.environ.get("CLAUDE_ARCHIVE_DIR")
+if _claude_data_dir or _claude_archive_dir:
+    import shutil
+    from claude_archive.config import Config, SourceConfig, GeneralConfig, BackendsConfig, BackendConfig
+
+    # SQLite WAL mode requires file locking that GCS FUSE doesn't support.
+    # Copy the DB to local disk so SQLite can open it normally.
+    _local_archive = "/tmp/claude-archive"
+    _remote_archive = _claude_archive_dir or str(Path.home() / "claude-archive")
+    if os.path.exists(os.path.join(_remote_archive, "archive.db")):
+        os.makedirs(_local_archive, exist_ok=True)
+        for _f in ("archive.db",):
+            _src = os.path.join(_remote_archive, _f)
+            _dst = os.path.join(_local_archive, _f)
+            if os.path.exists(_src) and not os.path.exists(_dst):
+                shutil.copy2(_src, _dst)
+
+    _config = Config(
+        source=SourceConfig(claude_dir=_claude_data_dir or str(Path.home() / ".claude")),
+        general=GeneralConfig(archive_dir=_local_archive),
+        backends=BackendsConfig(
+            tantivy=BackendConfig(enabled=False),  # Tantivy index not copied; use SQLite FTS5
+        ),
+    )
+    _default_archive = bridge.ArchiveBridge(config=_config)
+else:
+    _default_archive = bridge.ArchiveBridge()
+
+
+def get_archive() -> bridge.ArchiveBridge:
+    """Return the ArchiveBridge for the current request.
+
+    If the request has a viewer_id in the session cookie, return the viewer's
+    archive.  Otherwise, return the default (owner's) archive.
+    """
+    viewer_id = session.get("viewer_id")
+    if viewer_id:
+        viewer = _session_mgr.get(viewer_id)
+        if viewer:
+            return viewer.archive
+        # Stale cookie — clear it
+        session.pop("viewer_id", None)
+    return _default_archive
+
+
+@app.context_processor
+def inject_viewer_state():
+    """Make `is_viewer` available in all templates."""
+    return {"is_viewer": "viewer_id" in session and _session_mgr.get(session["viewer_id"]) is not None}
+
+
+# --- Background cleanup thread ---
+
+def _cleanup_loop():
+    while True:
+        threading.Event().wait(300)  # every 5 minutes
+        _session_mgr.cleanup_expired()
+
+_cleanup_thread = threading.Thread(target=_cleanup_loop, daemon=True)
+_cleanup_thread.start()
 
 
 @app.template_filter("fmt_ts")
@@ -186,9 +262,10 @@ def short_id_filter(uuid_str):
 @app.route("/")
 def index():
     host_id = request.args.get("host")
-    projects = archive.list_projects(host_id=host_id)
-    stats = archive.get_stats(host_id=host_id)
-    hosts = archive.list_hosts()
+    arc = get_archive()
+    projects = arc.list_projects(host_id=host_id)
+    stats = arc.get_stats(host_id=host_id)
+    hosts = arc.list_hosts()
     return render_template("index.html", projects=projects, stats=stats,
                            hosts=hosts, current_host=host_id)
 
@@ -196,8 +273,9 @@ def index():
 @app.route("/project/<path:project_name>")
 def project_view(project_name):
     host_id = request.args.get("host")
-    projects = archive.list_projects(host_id=host_id)
-    hosts = archive.list_hosts()
+    arc = get_archive()
+    projects = arc.list_projects(host_id=host_id)
+    hosts = arc.list_hosts()
     # Find the selected project
     selected = None
     for proj in projects:
@@ -206,7 +284,7 @@ def project_view(project_name):
             break
     if not selected:
         return "Project not found", 404
-    stats = archive.get_stats(host_id=host_id)
+    stats = arc.get_stats(host_id=host_id)
     return render_template("index.html", projects=projects, selected_project=selected,
                            stats=stats, hosts=hosts, current_host=host_id)
 
@@ -214,14 +292,15 @@ def project_view(project_name):
 @app.route("/session/<session_id>")
 def session_view(session_id):
     host_id = request.args.get("host")
-    projects = archive.list_projects(host_id=host_id)
-    hosts = archive.list_hosts()
-    meta = archive.get_session_meta(session_id)
+    arc = get_archive()
+    projects = arc.list_projects(host_id=host_id)
+    hosts = arc.list_hosts()
+    meta = arc.get_session_meta(session_id)
     if not meta:
         return "Session not found", 404
 
     # Get all turns once, then slice for display
-    all_turns = archive.get_conversation_turns(meta.session_id)
+    all_turns = arc.get_conversation_turns(meta.session_id)
     total_turns = len(all_turns)
     turns = all_turns[:100]
 
@@ -250,7 +329,7 @@ def session_view(session_id):
 def api_session_turns(session_id):
     offset = request.args.get("offset", 0, type=int)
     limit = request.args.get("limit", 100, type=int)
-    turns = archive.get_conversation_turns(session_id, offset=offset, limit=limit)
+    turns = get_archive().get_conversation_turns(session_id, offset=offset, limit=limit)
     return jsonify(turns)
 
 
@@ -262,8 +341,9 @@ def api_export(session_id):
     include_tools = data.get("include_tools", False)
     include_thinking = data.get("include_thinking", False)
 
-    all_turns = archive.get_conversation_turns(session_id)
-    meta = archive.get_session_meta(session_id)
+    arc = get_archive()
+    all_turns = arc.get_conversation_turns(session_id)
+    meta = arc.get_session_meta(session_id)
 
     doc = Document()
 
@@ -369,10 +449,11 @@ def search_view():
     msg_type = request.args.get("type")  # "user", "assistant", or None (both)
     if msg_type not in ("user", "assistant"):
         msg_type = None
+    arc = get_archive()
     results = []
     grouped_results = []
     if query:
-        results = archive.search(query, host_id=host_id, fuzzy=fuzzy, message_type=msg_type)
+        results = arc.search(query, host_id=host_id, fuzzy=fuzzy, message_type=msg_type)
         # Group results by project, preserving overall relevance order
         from collections import OrderedDict
         groups: OrderedDict[str, list] = OrderedDict()
@@ -380,9 +461,9 @@ def search_view():
             key = r.get("project_display") or "Unknown"
             groups.setdefault(key, []).append(r)
         grouped_results = [{"project": k, "hits": v} for k, v in groups.items()]
-    projects = archive.list_projects(host_id=host_id)
-    hosts = archive.list_hosts()
-    stats = archive.get_stats(host_id=host_id)
+    projects = arc.list_projects(host_id=host_id)
+    hosts = arc.list_hosts()
+    stats = arc.get_stats(host_id=host_id)
     return render_template("search.html", projects=projects, query=query,
                            results=results, grouped_results=grouped_results,
                            stats=stats, fuzzy=fuzzy,
@@ -390,5 +471,67 @@ def search_view():
                            hosts=hosts, current_host=host_id)
 
 
+# --- Multi-user upload / connect routes ---
+
+@app.route("/welcome")
+def welcome():
+    error = request.args.get("error")
+    return render_template("welcome.html", error=error)
+
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    file = request.files.get("archive")
+    if not file or not file.filename:
+        return redirect(url_for("welcome", error="No file selected."))
+
+    # Check disk budget
+    if _session_mgr.total_disk_bytes() > MAX_VIEWER_DISK:
+        return "Server storage is full. Please try again later.", 503
+
+    viewer_id = str(uuid.uuid4())
+    provider = UploadProvider(file)
+    result = provider.prepare(viewer_id)
+
+    if result.error:
+        return redirect(url_for("welcome", error=result.error))
+
+    _session_mgr.register(result.session)
+    session["viewer_id"] = viewer_id
+    return redirect(url_for("index"))
+
+
+@app.route("/connect-gcs", methods=["POST"])
+def connect_gcs():
+    gcs_path = request.form.get("gcs_path", "").strip()
+    if not gcs_path.startswith("gs://"):
+        return redirect(url_for("welcome", error="Path must start with gs://"))
+
+    # Check disk budget
+    if _session_mgr.total_disk_bytes() > MAX_VIEWER_DISK:
+        return "Server storage is full. Please try again later.", 503
+
+    viewer_id = str(uuid.uuid4())
+    provider = GCSBucketProvider(gcs_path)
+    result = provider.prepare(viewer_id)
+
+    if result.error:
+        return redirect(url_for("welcome", error=result.error))
+
+    _session_mgr.register(result.session)
+    session["viewer_id"] = viewer_id
+    return redirect(url_for("index"))
+
+
+@app.route("/disconnect", methods=["POST"])
+def disconnect():
+    viewer_id = session.pop("viewer_id", None)
+    if viewer_id:
+        _session_mgr.remove(viewer_id)
+    return redirect(url_for("welcome"))
+
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    app.run(debug=debug, host="0.0.0.0", port=port)
