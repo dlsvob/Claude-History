@@ -188,6 +188,7 @@ _session_mgr = SessionManager()
 # CLAUDE_ARCHIVE_DIR → SQLite DB + Tantivy index (mirrors ~/claude-archive/)
 _claude_data_dir = os.environ.get("CLAUDE_DATA_DIR")
 _claude_archive_dir = os.environ.get("CLAUDE_ARCHIVE_DIR")
+_default_archive = None
 if _claude_data_dir or _claude_archive_dir:
     import shutil
     from claude_archive.config import Config, SourceConfig, GeneralConfig, BackendsConfig, BackendConfig
@@ -212,15 +213,13 @@ if _claude_data_dir or _claude_archive_dir:
         ),
     )
     _default_archive = bridge.ArchiveBridge(config=_config)
-else:
-    _default_archive = bridge.ArchiveBridge()
 
 
-def get_archive() -> bridge.ArchiveBridge:
+def get_archive() -> bridge.ArchiveBridge | None:
     """Return the ArchiveBridge for the current request.
 
     If the request has a viewer_id in the session cookie, return the viewer's
-    archive.  Otherwise, return the default (owner's) archive.
+    archive.  Otherwise, return the default (owner's) archive (may be None).
     """
     viewer_id = session.get("viewer_id")
     if viewer_id:
@@ -261,6 +260,23 @@ def short_id_filter(uuid_str):
 
 @app.route("/")
 def index():
+    # Show the welcome/upload page when no viewer session is active
+    viewer_id = session.get("viewer_id")
+    if not viewer_id or not _session_mgr.get(viewer_id):
+        # Also check if there's owner data loaded (GCS FUSE mode)
+        if _default_archive is None:
+            error = request.args.get("error")
+            return render_template("welcome.html", error=error)
+        # Owner data exists — check if it actually has content
+        try:
+            stats = _default_archive.get_stats()
+            if not stats.get("session_count"):
+                error = request.args.get("error")
+                return render_template("welcome.html", error=error)
+        except Exception:
+            error = request.args.get("error")
+            return render_template("welcome.html", error=error)
+
     host_id = request.args.get("host")
     arc = get_archive()
     projects = arc.list_projects(host_id=host_id)
@@ -272,8 +288,10 @@ def index():
 
 @app.route("/project/<path:project_name>")
 def project_view(project_name):
-    host_id = request.args.get("host")
     arc = get_archive()
+    if arc is None:
+        return redirect(url_for("index"))
+    host_id = request.args.get("host")
     projects = arc.list_projects(host_id=host_id)
     hosts = arc.list_hosts()
     # Find the selected project
@@ -291,8 +309,10 @@ def project_view(project_name):
 
 @app.route("/session/<session_id>")
 def session_view(session_id):
-    host_id = request.args.get("host")
     arc = get_archive()
+    if arc is None:
+        return redirect(url_for("index"))
+    host_id = request.args.get("host")
     projects = arc.list_projects(host_id=host_id)
     hosts = arc.list_hosts()
     meta = arc.get_session_meta(session_id)
@@ -327,9 +347,12 @@ def session_view(session_id):
 
 @app.route("/api/session/<session_id>/turns")
 def api_session_turns(session_id):
+    arc = get_archive()
+    if arc is None:
+        return jsonify([])
     offset = request.args.get("offset", 0, type=int)
     limit = request.args.get("limit", 100, type=int)
-    turns = get_archive().get_conversation_turns(session_id, offset=offset, limit=limit)
+    turns = arc.get_conversation_turns(session_id, offset=offset, limit=limit)
     return jsonify(turns)
 
 
@@ -342,6 +365,8 @@ def api_export(session_id):
     include_thinking = data.get("include_thinking", False)
 
     arc = get_archive()
+    if arc is None:
+        return redirect(url_for("index"))
     all_turns = arc.get_conversation_turns(session_id)
     meta = arc.get_session_meta(session_id)
 
@@ -450,6 +475,8 @@ def search_view():
     if msg_type not in ("user", "assistant"):
         msg_type = None
     arc = get_archive()
+    if arc is None:
+        return redirect(url_for("index"))
     results = []
     grouped_results = []
     if query:
@@ -473,17 +500,11 @@ def search_view():
 
 # --- Multi-user upload / connect routes ---
 
-@app.route("/welcome")
-def welcome():
-    error = request.args.get("error")
-    return render_template("welcome.html", error=error)
-
-
 @app.route("/upload", methods=["POST"])
 def upload():
     file = request.files.get("archive")
     if not file or not file.filename:
-        return redirect(url_for("welcome", error="No file selected."))
+        return redirect(url_for("index", error="No file selected."))
 
     # Check disk budget
     if _session_mgr.total_disk_bytes() > MAX_VIEWER_DISK:
@@ -494,7 +515,7 @@ def upload():
     result = provider.prepare(viewer_id)
 
     if result.error:
-        return redirect(url_for("welcome", error=result.error))
+        return redirect(url_for("index", error=result.error))
 
     _session_mgr.register(result.session)
     session["viewer_id"] = viewer_id
@@ -505,7 +526,7 @@ def upload():
 def connect_gcs():
     gcs_path = request.form.get("gcs_path", "").strip()
     if not gcs_path.startswith("gs://"):
-        return redirect(url_for("welcome", error="Path must start with gs://"))
+        return redirect(url_for("index", error="Path must start with gs://"))
 
     # Check disk budget
     if _session_mgr.total_disk_bytes() > MAX_VIEWER_DISK:
@@ -516,7 +537,7 @@ def connect_gcs():
     result = provider.prepare(viewer_id)
 
     if result.error:
-        return redirect(url_for("welcome", error=result.error))
+        return redirect(url_for("index", error=result.error))
 
     _session_mgr.register(result.session)
     session["viewer_id"] = viewer_id
@@ -528,7 +549,7 @@ def disconnect():
     viewer_id = session.pop("viewer_id", None)
     if viewer_id:
         _session_mgr.remove(viewer_id)
-    return redirect(url_for("welcome"))
+    return redirect(url_for("index"))
 
 
 if __name__ == "__main__":

@@ -7,12 +7,13 @@ ArchiveBridge suitable for browsing.
 from __future__ import annotations
 
 import os
+import re
 import shutil
-import subprocess
 import tarfile
 import uuid
 import zipfile
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -125,7 +126,7 @@ class UploadProvider(DataProvider):
 
 
 class GCSBucketProvider(DataProvider):
-    """Syncs Claude data from a GCS bucket path via gcloud CLI."""
+    """Syncs Claude data from a GCS bucket path using the Python GCS client."""
 
     def __init__(self, gcs_path: str):
         """gcs_path: gs://bucket/path to a .claude/ directory."""
@@ -140,15 +141,46 @@ class GCSBucketProvider(DataProvider):
         os.makedirs(archive_dir, exist_ok=True)
 
         try:
-            # Sync from GCS
-            cmd = [
-                "gcloud", "storage", "rsync", "-r",
-                self.gcs_path, str(claude_dir),
-            ]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            if proc.returncode != 0:
+            from google.cloud import storage as gcs
+
+            # Parse gs://bucket/prefix
+            m = re.match(r"^gs://([^/]+)(?:/(.*))?$", self.gcs_path)
+            if not m:
+                return ProviderResult(session=None, error="Invalid GCS path format. Use gs://bucket/path")
+            bucket_name, prefix = m.group(1), m.group(2) or ""
+            if prefix and not prefix.endswith("/"):
+                prefix += "/"
+
+            client = gcs.Client()
+            bucket = client.bucket(bucket_name)
+
+            # Only download the projects/ subdirectory (session JSONL files).
+            # Other dirs (debug/, file-history/, plugins/) aren't needed for browsing.
+            projects_prefix = prefix + "projects/"
+            blobs = list(bucket.list_blobs(prefix=projects_prefix))
+
+            if not blobs:
+                # Fallback: try the full prefix in case structure is different
+                blobs = list(bucket.list_blobs(prefix=prefix))
+
+            if not blobs:
                 shutil.rmtree(base, ignore_errors=True)
-                return ProviderResult(session=None, error=f"GCS sync failed: {proc.stderr[:500]}")
+                return ProviderResult(session=None, error=f"No files found at {self.gcs_path}")
+
+            # Filter to actual files (skip directory markers)
+            blobs = [b for b in blobs if not b.name.endswith("/")]
+
+            # Download blobs in parallel
+            def _download(blob):
+                rel = blob.name[len(prefix):] if prefix else blob.name
+                dest = claude_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                blob.download_to_filename(str(dest))
+
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                futures = [pool.submit(_download, b) for b in blobs]
+                for f in as_completed(futures):
+                    f.result()  # raise on error
 
             # Run ingest with SQLite-only config
             config = Config(
@@ -176,9 +208,9 @@ class GCSBucketProvider(DataProvider):
             )
             return ProviderResult(session=session)
 
-        except subprocess.TimeoutExpired:
+        except ImportError:
             shutil.rmtree(base, ignore_errors=True)
-            return ProviderResult(session=None, error="GCS sync timed out after 120 seconds.")
+            return ProviderResult(session=None, error="GCS support not available (google-cloud-storage not installed).")
         except Exception as exc:
             shutil.rmtree(base, ignore_errors=True)
             return ProviderResult(session=None, error=f"Failed to sync from GCS: {exc}")

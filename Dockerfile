@@ -7,7 +7,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Install claude-archive from pre-built wheel + remaining app dependencies
 COPY vendor/ vendor/
-RUN uv pip install --system vendor/*.whl "flask>=3.1.3" "gunicorn>=22.0" "python-docx>=1.2.0" && \
+RUN uv pip install --system vendor/*.whl "flask>=3.1.3" "gunicorn>=22.0" "python-docx>=1.2.0" "google-cloud-storage>=2.18.0" && \
     rm -rf vendor/
 
 # Copy app source
