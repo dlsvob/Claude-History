@@ -97,11 +97,24 @@ def _add_markdown_to_doc(doc, md_text):
             while i < len(lines) and "|" in lines[i] and not _is_table_separator(lines[i]):
                 body_rows.append(_parse_table_row(lines[i]))
                 i += 1
-            # Create Word table
+            # Create Word table — clean style with header band, no inner grid
             num_cols = len(header_cells)
             table = doc.add_table(rows=1 + len(body_rows), cols=num_cols)
             table.style = "Table Grid"
-            # Header row
+            # Remove all borders, then add only a bottom border on header
+            from docx.oxml.ns import qn
+            for row in table.rows:
+                for cell in row.cells:
+                    tcPr = cell._tc.get_or_add_tcPr()
+                    tcBorders = tcPr.makeelement(qn("w:tcBorders"), {})
+                    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+                        el = tcBorders.makeelement(qn(f"w:{edge}"), {
+                            qn("w:val"): "none", qn("w:sz"): "0",
+                            qn("w:space"): "0", qn("w:color"): "auto",
+                        })
+                        tcBorders.append(el)
+                    tcPr.append(tcBorders)
+            # Header row: bold text + bottom border
             for ci, cell_text in enumerate(header_cells):
                 if ci < num_cols:
                     cell = table.rows[0].cells[ci]
@@ -110,6 +123,22 @@ def _add_markdown_to_doc(doc, md_text):
                     run = para.add_run(cell_text)
                     run.bold = True
                     run.font.size = Pt(9)
+                    run.font.color.rgb = RGBColor(0x44, 0x44, 0x44)
+                    # Add bottom border to header cells
+                    tcPr = cell._tc.get_or_add_tcPr()
+                    tcBorders = tcPr.makeelement(qn("w:tcBorders"), {})
+                    for edge in ("top", "left", "right", "insideH", "insideV"):
+                        el = tcBorders.makeelement(qn(f"w:{edge}"), {
+                            qn("w:val"): "none", qn("w:sz"): "0",
+                            qn("w:space"): "0", qn("w:color"): "auto",
+                        })
+                        tcBorders.append(el)
+                    bottom = tcBorders.makeelement(qn("w:bottom"), {
+                        qn("w:val"): "single", qn("w:sz"): "6",
+                        qn("w:space"): "0", qn("w:color"): "BBBBBB",
+                    })
+                    tcBorders.append(bottom)
+                    tcPr.append(tcBorders)
             # Body rows
             for ri, row_cells in enumerate(body_rows):
                 for ci, cell_text in enumerate(row_cells):
@@ -120,6 +149,7 @@ def _add_markdown_to_doc(doc, md_text):
                         _add_inline_runs(para, cell_text)
                         for run in para.runs:
                             run.font.size = Pt(9)
+                            run.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
             doc.add_paragraph()  # spacing after table
             continue
 
