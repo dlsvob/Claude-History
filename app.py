@@ -22,11 +22,19 @@ from providers import UploadProvider, GCSBucketProvider, MAX_VIEWER_DISK
 
 # --- Markdown-to-docx helpers ---
 
+# XML 1.0 forbids control characters except \t, \n, \r.
+_XML_ILLEGAL_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
+def _sanitize_xml(text: str) -> str:
+    """Remove characters that are illegal in XML 1.0."""
+    return _XML_ILLEGAL_RE.sub('', text) if text else text
+
 _INLINE_RE = re.compile(r'\*\*(.+?)\*\*|__(.+?)__|`(.+?)`|\*(.+?)\*|_(.+?)_')
 
 
 def _add_inline_runs(para, text):
     """Parse inline markdown (bold, italic, code) into docx runs."""
+    text = _sanitize_xml(text)
     pos = 0
     for m in _INLINE_RE.finditer(text):
         # Plain text before this match
@@ -66,6 +74,7 @@ def _is_table_separator(line):
 
 def _add_markdown_to_doc(doc, md_text):
     """Convert a markdown string into properly formatted docx elements."""
+    md_text = _sanitize_xml(md_text)
     lines = md_text.split("\n")
     i = 0
     while i < len(lines):
@@ -431,7 +440,7 @@ def api_export(session_id):
                 ts_para.runs[0].font.size = Pt(8)
                 ts_para.runs[0].font.color.rgb = RGBColor(0x99, 0x99, 0x99)
             # User text
-            doc.add_paragraph(turn["text"])
+            doc.add_paragraph(_sanitize_xml(turn["text"]))
 
         elif turn["type"] == "assistant":
             heading = doc.add_heading("Claude", level=2)
@@ -471,7 +480,7 @@ def api_export(session_id):
                     run.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
 
                     if tc.get("tool_result") and tc["tool_result"].get("text"):
-                        result_text = tc["tool_result"]["text"]
+                        result_text = _sanitize_xml(tc["tool_result"]["text"])
                         if len(result_text) > 500:
                             result_text = result_text[:500] + "\n... (truncated)"
                         para = doc.add_paragraph(result_text)
