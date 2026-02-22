@@ -43,6 +43,9 @@
             <label class="text-xs text-claude-muted items-center gap-1 hidden" id="opt-thinking">
                 <input type="checkbox" id="include-thinking"> Thinking
             </label>
+            <label class="text-xs text-claude-muted items-center gap-1 hidden" id="opt-timestamps">
+                <input type="checkbox" id="include-timestamps"> Timestamps
+            </label>
             <button onclick="exportSelected()" id="export-btn"
                     class="text-xs text-claude-bg bg-claude-accent px-3 py-1 rounded font-bold hover:bg-white transition-colors hidden">
                 Export .docx
@@ -677,12 +680,18 @@ function updateExportBtn() {
         optTools.classList.add('flex');
         optThinking.classList.remove('hidden');
         optThinking.classList.add('flex');
+        const optTimestamps = document.getElementById('opt-timestamps');
+        optTimestamps.classList.remove('hidden');
+        optTimestamps.classList.add('flex');
     } else {
         exportBtn.classList.add('hidden');
         optTools.classList.add('hidden');
         optTools.classList.remove('flex');
         optThinking.classList.add('hidden');
         optThinking.classList.remove('flex');
+        const optTimestamps = document.getElementById('opt-timestamps');
+        optTimestamps.classList.add('hidden');
+        optTimestamps.classList.remove('flex');
     }
 }
 
@@ -700,6 +709,7 @@ function exportSelected() {
     const indices = Array.from(checked).map(cb => parseInt(cb.dataset.turnIndex));
     const includeTools = document.getElementById('include-tools').checked;
     const includeThinking = document.getElementById('include-thinking').checked;
+    const includeTimestamps = document.getElementById('include-timestamps').checked;
 
     const exportBtn = document.getElementById('export-btn');
     exportBtn.textContent = 'Exporting...';
@@ -711,7 +721,8 @@ function exportSelected() {
         body: JSON.stringify({
             indices: indices,
             include_tools: includeTools,
-            include_thinking: includeThinking
+            include_thinking: includeThinking,
+            include_timestamps: includeTimestamps
         })
     })
     .then(resp => {

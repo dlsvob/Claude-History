@@ -15,6 +15,7 @@ from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import bridge
+from live_bridge import LiveBridge
 from session_manager import SessionManager
 from providers import UploadProvider, GCSBucketProvider, MAX_VIEWER_DISK
 
@@ -214,15 +215,14 @@ if _claude_data_dir or _claude_archive_dir:
     )
     _default_archive = bridge.ArchiveBridge(config=_config)
 else:
-    # Local dev: use default ~/.claude/ + ~/claude-archive/ if they exist
+    # Local dev: read directly from ~/.claude/ JSONL files (no ingest needed)
     _local_claude = Path.home() / ".claude"
-    _local_archive_dir = Path.home() / "claude-archive"
-    if _local_claude.exists() or _local_archive_dir.exists():
-        _default_archive = bridge.ArchiveBridge()
+    if _local_claude.exists():
+        _default_archive = LiveBridge(_local_claude)
 
 
-def get_archive() -> bridge.ArchiveBridge | None:
-    """Return the ArchiveBridge for the current request.
+def get_archive() -> bridge.ArchiveBridge | LiveBridge | None:
+    """Return the archive bridge for the current request.
 
     If the request has a viewer_id in the session cookie, return the viewer's
     archive.  Otherwise, return the default (owner's) archive (may be None).
@@ -369,6 +369,7 @@ def api_export(session_id):
     selected_indices = set(data.get("indices", []))
     include_tools = data.get("include_tools", False)
     include_thinking = data.get("include_thinking", False)
+    include_timestamps = data.get("include_timestamps", True)
 
     arc = get_archive()
     if arc is None:
@@ -395,9 +396,10 @@ def api_export(session_id):
             heading = doc.add_heading("You", level=2)
             for run in heading.runs:
                 run.font.color.rgb = RGBColor(0x3B, 0x82, 0xF6)
-            ts_para = doc.add_paragraph(bridge.format_timestamp(turn["timestamp"]))
-            ts_para.runs[0].font.size = Pt(8)
-            ts_para.runs[0].font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+            if include_timestamps:
+                ts_para = doc.add_paragraph(bridge.format_timestamp(turn["timestamp"]))
+                ts_para.runs[0].font.size = Pt(8)
+                ts_para.runs[0].font.color.rgb = RGBColor(0x99, 0x99, 0x99)
             # User text
             doc.add_paragraph(turn["text"])
 
@@ -405,9 +407,10 @@ def api_export(session_id):
             heading = doc.add_heading("Claude", level=2)
             for run in heading.runs:
                 run.font.color.rgb = RGBColor(0xD4, 0xA5, 0x74)
-            ts_para = doc.add_paragraph(bridge.format_timestamp(turn["timestamp"]))
-            ts_para.runs[0].font.size = Pt(8)
-            ts_para.runs[0].font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+            if include_timestamps:
+                ts_para = doc.add_paragraph(bridge.format_timestamp(turn["timestamp"]))
+                ts_para.runs[0].font.size = Pt(8)
+                ts_para.runs[0].font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 
             # Text blocks — render markdown formatting
             for text in turn.get("text_blocks", []):
