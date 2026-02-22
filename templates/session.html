@@ -79,13 +79,37 @@
                 <span class="text-[10px] text-claude-muted/30">{{ turn.model }}</span>
                 {% endif %}
                 <span class="text-xs text-claude-muted truncate max-w-xl">{{ turn.text_blocks[0][:120] if turn.text_blocks else '' }}</span>
-                {% set ns2 = namespace(has_interactive=false) %}
-                {% for tc in turn.tool_calls if tc.is_interactive %}{% if not ns2.has_interactive %}{% set ns2.has_interactive = true %}{% endif %}{% endfor %}
-                {% if ns2.has_interactive %}
+                {# Turn summary badges by tier #}
+                {% set ns2 = namespace(has_ask=false, has_task_create=false, has_task_done=false, has_plan=false, write_count=0, bash_count=0, routine_count=0) %}
+                {% for tc in turn.tool_calls %}
+                    {% if tc.tool_name == 'AskUserQuestion' %}{% set ns2.has_ask = true %}{% endif %}
+                    {% if tc.tool_name == 'TaskCreate' %}{% set ns2.has_task_create = true %}{% endif %}
+                    {% if tc.tool_name == 'TaskUpdate' and tc.tool_input.get('status') == 'completed' %}{% set ns2.has_task_done = true %}{% endif %}
+                    {% if tc.tool_name in ('EnterPlanMode', 'ExitPlanMode') %}{% set ns2.has_plan = true %}{% endif %}
+                    {% if tc.tool_name in ('Write', 'Edit', 'NotebookEdit') %}{% set ns2.write_count = ns2.write_count + 1 %}{% endif %}
+                    {% if tc.tool_name == 'Bash' %}{% set ns2.bash_count = ns2.bash_count + 1 %}{% endif %}
+                    {% if tc.display_tier == 'routine' %}{% set ns2.routine_count = ns2.routine_count + 1 %}{% endif %}
+                {% endfor %}
+                {% if ns2.has_ask %}
                 <span class="text-[10px] text-blue-300/80 bg-blue-900/30 px-1.5 py-0.5 rounded">asked you</span>
                 {% endif %}
-                {% if turn.tool_calls %}
-                <span class="text-[10px] text-claude-blue/60">{{ turn.tool_calls|length }} tools</span>
+                {% if ns2.has_task_create %}
+                <span class="text-[10px] text-green-300/80 bg-green-900/30 px-1.5 py-0.5 rounded">+ task</span>
+                {% endif %}
+                {% if ns2.has_task_done %}
+                <span class="text-[10px] text-green-300/80 bg-green-900/30 px-1.5 py-0.5 rounded">✓ task</span>
+                {% endif %}
+                {% if ns2.has_plan %}
+                <span class="text-[10px] text-purple-300/80 bg-purple-900/30 px-1.5 py-0.5 rounded">plan mode</span>
+                {% endif %}
+                {% if ns2.write_count %}
+                <span class="text-[10px] text-yellow-300/80 bg-yellow-900/30 px-1.5 py-0.5 rounded">{{ ns2.write_count }} file{{ 's' if ns2.write_count > 1 }}</span>
+                {% endif %}
+                {% if ns2.bash_count %}
+                <span class="text-[10px] text-blue-300/80 bg-blue-900/30 px-1.5 py-0.5 rounded">{{ ns2.bash_count }} cmd{{ 's' if ns2.bash_count > 1 }}</span>
+                {% endif %}
+                {% if ns2.routine_count %}
+                <span class="text-[10px] text-claude-muted/60">{{ ns2.routine_count }} read{{ 's' if ns2.routine_count > 1 }}</span>
                 {% endif %}
             </summary>
             <div class="px-4 pb-3">
@@ -93,6 +117,149 @@
                 {% for text in turn.text_blocks %}
                 <div class="assistant-text text-sm mb-3" data-markdown>{{ text }}</div>
                 {% endfor %}
+
+                {# === TIER 1: Prominent tools — always visible, styled cards === #}
+                {% for tc in turn.prominent_tools %}
+                    {% if tc.tool_name == 'AskUserQuestion' %}
+                    <div class="tier-prominent rounded-lg p-3 mb-3 border border-blue-400/20 bg-blue-950/20">
+                        <div class="text-xs text-blue-300 font-bold mb-2">Asked you</div>
+                        {% if tc.tool_input.get('questions') %}
+                        {% for q in tc.tool_input.questions %}
+                        <div class="{% if not loop.last %}mb-2{% endif %}">
+                            <div class="text-sm text-claude-text">{{ q.question }}</div>
+                            {% if q.options %}
+                            <div class="flex flex-wrap gap-1.5 mt-1.5">
+                                {% for opt in q.options %}
+                                <span class="text-xs bg-blue-900/30 text-blue-200/80 px-2 py-0.5 rounded border border-blue-500/20">{{ opt.label }}</span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                        {% endif %}
+                        {% if tc.tool_result %}
+                        <div class="mt-2 pt-2 border-t border-blue-400/20">
+                            <span class="text-xs text-green-400 font-bold">Answer:</span>
+                            <span class="text-sm text-claude-text ml-1">{{ tc.tool_result.text }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    {% elif tc.tool_name == 'TaskCreate' %}
+                    <div class="tier-prominent rounded-lg p-3 mb-3 border border-green-400/20 bg-green-950/20">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-xs text-green-300 font-bold">+ Task created</span>
+                        </div>
+                        <div class="text-sm text-claude-text">{{ tc.display_summary.headline }}</div>
+                        {% if tc.display_summary.detail %}
+                        <div class="text-xs text-claude-muted mt-1">{{ tc.display_summary.detail }}</div>
+                        {% endif %}
+                    </div>
+
+                    {% elif tc.tool_name == 'TaskUpdate' %}
+                    {% set tu_status = tc.tool_input.get('status', '') %}
+                    <div class="tier-prominent rounded-lg px-3 py-2 mb-3 border {% if tu_status == 'completed' %}border-green-400/20 bg-green-950/20{% elif tu_status == 'in_progress' %}border-yellow-400/20 bg-yellow-950/20{% else %}border-claude-border bg-claude-card{% endif %}">
+                        <div class="flex items-center gap-2 text-sm">
+                            {% if tu_status == 'completed' %}
+                            <span class="text-green-400">✓</span>
+                            {% elif tu_status == 'in_progress' %}
+                            <span class="text-yellow-400">▶</span>
+                            {% else %}
+                            <span class="text-claude-muted">•</span>
+                            {% endif %}
+                            <span class="text-claude-text">{{ tc.display_summary.headline }}</span>
+                        </div>
+                    </div>
+
+                    {% elif tc.tool_name in ('EnterPlanMode', 'ExitPlanMode') %}
+                    <div class="tier-prominent rounded px-3 py-1.5 mb-3 border border-purple-400/20 bg-purple-950/10 text-xs text-purple-300/80 flex items-center gap-2">
+                        <span>{{ '📋' if tc.tool_name == 'EnterPlanMode' else '✅' }}</span>
+                        <span>{{ tc.display_summary.headline }}</span>
+                    </div>
+
+                    {% elif tc.tool_name == 'Skill' %}
+                    <div class="tier-prominent rounded-lg px-3 py-2 mb-3 border border-purple-400/20 bg-purple-950/20">
+                        <div class="flex items-center gap-2">
+                            <span class="tool-badge-purple text-xs px-1.5 py-0.5 rounded font-bold">Skill</span>
+                            <span class="text-sm text-claude-text">/{{ tc.display_summary.headline }}</span>
+                        </div>
+                    </div>
+                    {% endif %}
+                {% endfor %}
+
+                {# === TIER 2: Notable tools — compact inline cards, always visible === #}
+                {% if turn.notable_tools %}
+                <div class="tier-notable-group space-y-1 mb-3">
+                    {% for tc in turn.notable_tools %}
+                    <details class="notable-tool-card rounded border border-claude-border/50 bg-claude-card/50">
+                        <summary class="cursor-pointer flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-claude-card/80 transition-colors">
+                            <span class="tool-badge-{{ tc.tool_name|lower }} px-1.5 py-0.5 rounded font-bold text-[10px]">{{ tc.tool_name }}</span>
+                            <span class="text-claude-muted truncate max-w-lg {% if tc.tool_name in ('Bash', 'Write', 'Edit', 'NotebookEdit') %}font-mono{% endif %}">{{ tc.display_summary.headline }}</span>
+                            {% if tc.display_summary.status == 'error' %}
+                            <span class="text-red-400 ml-auto shrink-0">error</span>
+                            {% elif tc.display_summary.status == 'ok' %}
+                            <span class="text-green-400/60 ml-auto shrink-0">✓</span>
+                            {% endif %}
+                        </summary>
+                        <div class="px-3 pb-2 pt-1 border-t border-claude-border/30 space-y-1">
+                            <details class="leaf-block">
+                                <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Input</summary>
+                                <pre class="bg-claude-bg rounded p-2 overflow-x-auto text-[11px] max-h-48 overflow-y-auto mt-1"><code class="language-json">{{ tc.tool_input | tojson(indent=2) }}</code></pre>
+                            </details>
+                            {% if tc.tool_result %}
+                            <details class="leaf-block">
+                                <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Output{% if tc.tool_result.is_error %} <span class="text-claude-red">(error)</span>{% endif %}</summary>
+                                <pre class="tool-output rounded p-2 overflow-x-auto text-[11px] max-h-64 overflow-y-auto mt-1 {% if tc.tool_result.is_error %}border-l-2 border-claude-red{% endif %}">{{ tc.tool_result.text }}</pre>
+                            </details>
+                            {% endif %}
+                        </div>
+                    </details>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                {# === TIER 3: Routine tools — collapsed summary group === #}
+                {% if turn.routine_tools %}
+                {% set rt = namespace(counts={}) %}
+                {% for tc in turn.routine_tools %}
+                    {% if tc.tool_name in rt.counts %}
+                        {% if rt.counts.update({tc.tool_name: rt.counts[tc.tool_name] + 1}) %}{% endif %}
+                    {% else %}
+                        {% if rt.counts.update({tc.tool_name: 1}) %}{% endif %}
+                    {% endif %}
+                {% endfor %}
+                <details class="routine-tools-group mb-2">
+                    <summary class="cursor-pointer text-xs text-claude-muted/70 hover:text-claude-muted transition-colors py-1 flex items-center gap-1">
+                        <span>Explored {{ turn.routine_tools|length }} item{{ 's' if turn.routine_tools|length > 1 }}</span>
+                        <span class="text-claude-muted/40">({% for name, count in rt.counts.items() %}{{ count }} {{ name }}{% if not loop.last %}, {% endif %}{% endfor %})</span>
+                    </summary>
+                    <div class="mt-1 pl-3 border-l border-claude-border/30 space-y-1">
+                        {% for tc in turn.routine_tools %}
+                        <details class="tool-block">
+                            <summary class="cursor-pointer flex items-center gap-2 py-0.5 text-[11px]">
+                                <span class="text-claude-muted/60 font-bold">{{ tc.tool_name }}</span>
+                                <span class="text-claude-muted/50 truncate max-w-lg font-mono">{{ tc.display_summary.headline }}</span>
+                                {% if tc.display_summary.status == 'error' %}
+                                <span class="text-red-400">error</span>
+                                {% endif %}
+                            </summary>
+                            <div class="mt-1 pl-3 border-l border-claude-border/20 space-y-1">
+                                <details class="leaf-block">
+                                    <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Input</summary>
+                                    <pre class="bg-claude-bg rounded p-2 overflow-x-auto text-[11px] max-h-48 overflow-y-auto mt-1"><code class="language-json">{{ tc.tool_input | tojson(indent=2) }}</code></pre>
+                                </details>
+                                {% if tc.tool_result %}
+                                <details class="leaf-block">
+                                    <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Output{% if tc.tool_result.is_error %} <span class="text-claude-red">(error)</span>{% endif %}</summary>
+                                    <pre class="tool-output rounded p-2 overflow-x-auto text-[11px] max-h-64 overflow-y-auto mt-1 {% if tc.tool_result.is_error %}border-l-2 border-claude-red{% endif %}">{{ tc.tool_result.text }}</pre>
+                                </details>
+                                {% endif %}
+                            </div>
+                        </details>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
 
                 <!-- Thinking blocks (collapsible) -->
                 {% if turn.thinking_blocks %}
@@ -105,98 +272,6 @@
                         <details class="leaf-block">
                             <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Thought {{ loop.index }}</summary>
                             <div class="text-xs text-claude-muted whitespace-pre-wrap max-h-64 overflow-y-auto mt-1">{{ thought }}</div>
-                        </details>
-                        {% endfor %}
-                    </div>
-                </details>
-                {% endif %}
-
-                <!-- Interactive tool calls (AskUserQuestion) — always visible -->
-                {% for tc in turn.tool_calls if tc.is_interactive %}
-                <div class="rounded-lg p-3 mb-3 border border-blue-400/20 bg-blue-950/20">
-                    <div class="text-xs text-blue-300 font-bold mb-2">Asked you</div>
-                    {% if tc.tool_input.get('questions') %}
-                    {% for q in tc.tool_input.questions %}
-                    <div class="{% if not loop.last %}mb-2{% endif %}">
-                        <div class="text-sm text-claude-text">{{ q.question }}</div>
-                        {% if q.options %}
-                        <div class="flex flex-wrap gap-1.5 mt-1.5">
-                            {% for opt in q.options %}
-                            <span class="text-xs bg-blue-900/30 text-blue-200/80 px-2 py-0.5 rounded border border-blue-500/20">{{ opt.label }}</span>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
-                    {% endif %}
-                    {% if tc.tool_result %}
-                    <div class="mt-2 pt-2 border-t border-blue-400/20">
-                        <span class="text-xs text-green-400 font-bold">Answer:</span>
-                        <span class="text-sm text-claude-text ml-1">{{ tc.tool_result.text }}</span>
-                    </div>
-                    {% endif %}
-                </div>
-                {% endfor %}
-
-                <!-- Tool calls (collapsible) -->
-                {% set ns = namespace(regular_calls=[]) %}
-                {% for tc in turn.tool_calls if not tc.is_interactive %}
-                    {% if ns.regular_calls.append(tc) %}{% endif %}
-                {% endfor %}
-                {% if ns.regular_calls %}
-                <details class="tool-calls-group mb-2">
-                    <summary class="cursor-pointer text-xs text-claude-blue hover:text-claude-accent transition-colors py-1 flex items-center gap-2">
-                        <span>Tool calls ({{ ns.regular_calls|length }})</span>
-                        <span class="flex gap-1">
-                            {% set tool_names = [] %}
-                            {% for tc in ns.regular_calls %}
-                                {% if tc.tool_name not in tool_names %}
-                                    {% if tool_names.append(tc.tool_name) %}{% endif %}
-                                    <span class="tool-badge px-1.5 py-0 rounded text-[10px]">{{ tc.tool_name }}</span>
-                                {% endif %}
-                            {% endfor %}
-                        </span>
-                    </summary>
-                    <div class="mt-2 pl-3 border-l-2 border-claude-border space-y-2">
-                        {% for tc in ns.regular_calls %}
-                        <details class="tool-block">
-                            <summary class="cursor-pointer flex items-center gap-2 py-1 text-xs">
-                                <span class="tool-badge px-1.5 py-0.5 rounded font-bold">{{ tc.tool_name }}</span>
-                                {% if tc.tool_input.get('description') %}
-                                <span class="text-claude-muted truncate max-w-lg">{{ tc.tool_input.description }}</span>
-                                {% elif tc.tool_input.get('command') %}
-                                <span class="text-claude-muted font-mono truncate max-w-lg">{{ tc.tool_input.command[:100] }}</span>
-                                {% elif tc.tool_input.get('pattern') %}
-                                <span class="text-claude-muted font-mono truncate max-w-lg">{{ tc.tool_input.pattern }}</span>
-                                {% elif tc.tool_input.get('file_path') %}
-                                <span class="text-claude-muted font-mono truncate max-w-lg">{{ tc.tool_input.file_path }}</span>
-                                {% elif tc.tool_input.get('query') %}
-                                <span class="text-claude-muted truncate max-w-lg">{{ tc.tool_input.query }}</span>
-                                {% elif tc.tool_input.get('prompt') %}
-                                <span class="text-claude-muted truncate max-w-lg">{{ tc.tool_input.prompt[:80] }}</span>
-                                {% elif tc.tool_input.get('old_string') %}
-                                <span class="text-claude-muted font-mono truncate max-w-lg">{{ tc.tool_input.file_path or '' }}</span>
-                                {% endif %}
-                                {% if tc.tool_result %}
-                                    {% if tc.tool_result.is_error %}
-                                    <span class="text-claude-red">error</span>
-                                    {% else %}
-                                    <span class="text-claude-green">ok</span>
-                                    {% endif %}
-                                {% endif %}
-                            </summary>
-                            <div class="mt-1 pl-3 border-l border-claude-border/50 space-y-1">
-                                <details class="leaf-block">
-                                    <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Input</summary>
-                                    <pre class="bg-claude-bg rounded p-2 overflow-x-auto text-[11px] max-h-48 overflow-y-auto mt-1"><code class="language-json">{{ tc.tool_input | tojson(indent=2) }}</code></pre>
-                                </details>
-                                {% if tc.tool_result %}
-                                <details class="leaf-block">
-                                    <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Output{% if tc.tool_result.is_error %} <span class="text-claude-red">(error)</span>{% endif %}</summary>
-                                    <pre class="tool-output rounded p-2 overflow-x-auto text-[11px] max-h-64 overflow-y-auto mt-1 {% if tc.tool_result.is_error %}border-l-2 border-claude-red{% endif %}">{{ tc.tool_result.text }}</pre>
-                                </details>
-                                {% endif %}
-                            </div>
                         </details>
                         {% endfor %}
                     </div>
@@ -301,6 +376,196 @@ function loadSubagent(project, session, agentId, el) {
         });
 }
 
+// --- Tier helpers ---
+const TOOL_TIERS = {
+    AskUserQuestion: 'prominent', TaskCreate: 'prominent', TaskUpdate: 'prominent',
+    EnterPlanMode: 'prominent', ExitPlanMode: 'prominent', Skill: 'prominent',
+    Bash: 'notable', Write: 'notable', Edit: 'notable', WebSearch: 'notable',
+    WebFetch: 'notable', Task: 'notable', NotebookEdit: 'notable',
+    Read: 'routine', Glob: 'routine', Grep: 'routine',
+    TaskList: 'routine', TaskGet: 'routine', EnterWorktree: 'routine',
+};
+
+function getToolTier(name) { return TOOL_TIERS[name] || 'routine'; }
+
+function shortPath(path, maxParts = 3) {
+    if (!path) return '';
+    const parts = path.replace(/^\//, '').split('/');
+    return parts.length <= maxParts ? path : '…/' + parts.slice(-maxParts).join('/');
+}
+
+function getToolSummary(tc) {
+    // Use pre-computed summary from server if available
+    if (tc.display_summary) return tc.display_summary;
+    const inp = tc.tool_input || {};
+    let headline = '', detail = '', status = '';
+    if (tc.tool_result) status = tc.tool_result.is_error ? 'error' : 'ok';
+    switch (tc.tool_name) {
+        case 'AskUserQuestion':
+            headline = (inp.questions && inp.questions[0]?.question || '').slice(0, 120); break;
+        case 'TaskCreate':
+            headline = inp.subject || ''; detail = (inp.description || '').slice(0, 200); break;
+        case 'TaskUpdate': {
+            const s = inp.status || '', id = inp.taskId || '', subj = inp.subject || '';
+            if (s === 'completed') headline = `✓ #${id} ${subj}` || `✓ #${id} completed`;
+            else if (s === 'in_progress') headline = `▶ #${id} ${subj}` || `▶ #${id} in progress`;
+            else headline = s ? `#${id} → ${s}` : `#${id} updated`;
+            break; }
+        case 'EnterPlanMode': headline = 'Entering plan mode'; break;
+        case 'ExitPlanMode': headline = 'Exiting plan mode'; break;
+        case 'Skill': headline = inp.skill || ''; break;
+        case 'Bash': headline = inp.description || (inp.command || '').slice(0, 100); break;
+        case 'Write': headline = shortPath(inp.file_path); break;
+        case 'Edit': headline = shortPath(inp.file_path); break;
+        case 'NotebookEdit': headline = shortPath(inp.notebook_path); break;
+        case 'WebSearch': headline = inp.query || ''; break;
+        case 'WebFetch': headline = (inp.url || '').slice(0, 100); break;
+        case 'Task': headline = inp.description || ''; break;
+        case 'Read': headline = shortPath(inp.file_path); break;
+        case 'Glob': headline = inp.pattern || ''; break;
+        case 'Grep': headline = inp.pattern || ''; break;
+        default: headline = inp.description || (inp.command || '').slice(0, 100);
+    }
+    return { headline, detail, status };
+}
+
+function renderToolInputOutput(tc) {
+    const inputJson = JSON.stringify(tc.tool_input, null, 2);
+    let resultHtml = '';
+    if (tc.tool_result) {
+        const errClass = tc.tool_result.is_error ? 'border-l-2 border-claude-red' : '';
+        const errLabel = tc.tool_result.is_error ? ' <span class="text-claude-red">(error)</span>' : '';
+        resultHtml = `<details class="leaf-block">
+            <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Output${errLabel}</summary>
+            <pre class="tool-output rounded p-2 overflow-x-auto text-[11px] max-h-64 overflow-y-auto mt-1 ${errClass}">${escapeHtml(tc.tool_result.text)}</pre>
+        </details>`;
+    }
+    return `<details class="leaf-block">
+        <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Input</summary>
+        <pre class="bg-claude-bg rounded p-2 overflow-x-auto text-[11px] max-h-48 overflow-y-auto mt-1"><code class="language-json">${escapeHtml(inputJson)}</code></pre>
+    </details>${resultHtml}`;
+}
+
+function renderProminent(tc) {
+    const summary = getToolSummary(tc);
+    switch (tc.tool_name) {
+        case 'AskUserQuestion': {
+            let questionsHtml = '';
+            if (tc.tool_input?.questions) {
+                questionsHtml = tc.tool_input.questions.map(q => {
+                    const opts = (q.options || []).map(o =>
+                        `<span class="text-xs bg-blue-900/30 text-blue-200/80 px-2 py-0.5 rounded border border-blue-500/20">${escapeHtml(o.label)}</span>`
+                    ).join('');
+                    return `<div class="mb-2"><div class="text-sm text-claude-text">${escapeHtml(q.question)}</div>${opts ? `<div class="flex flex-wrap gap-1.5 mt-1.5">${opts}</div>` : ''}</div>`;
+                }).join('');
+            }
+            const answer = tc.tool_result
+                ? `<div class="mt-2 pt-2 border-t border-blue-400/20"><span class="text-xs text-green-400 font-bold">Answer:</span><span class="text-sm text-claude-text ml-1">${escapeHtml(tc.tool_result.text)}</span></div>` : '';
+            return `<div class="tier-prominent rounded-lg p-3 mb-3 border border-blue-400/20 bg-blue-950/20"><div class="text-xs text-blue-300 font-bold mb-2">Asked you</div>${questionsHtml}${answer}</div>`;
+        }
+        case 'TaskCreate':
+            return `<div class="tier-prominent rounded-lg p-3 mb-3 border border-green-400/20 bg-green-950/20">
+                <div class="flex items-center gap-2 mb-1"><span class="text-xs text-green-300 font-bold">+ Task created</span></div>
+                <div class="text-sm text-claude-text">${escapeHtml(summary.headline)}</div>
+                ${summary.detail ? `<div class="text-xs text-claude-muted mt-1">${escapeHtml(summary.detail)}</div>` : ''}
+            </div>`;
+        case 'TaskUpdate': {
+            const s = tc.tool_input?.status || '';
+            const borderClass = s === 'completed' ? 'border-green-400/20 bg-green-950/20'
+                : s === 'in_progress' ? 'border-yellow-400/20 bg-yellow-950/20'
+                : 'border-claude-border bg-claude-card';
+            const icon = s === 'completed' ? '<span class="text-green-400">✓</span>'
+                : s === 'in_progress' ? '<span class="text-yellow-400">▶</span>'
+                : '<span class="text-claude-muted">•</span>';
+            return `<div class="tier-prominent rounded-lg px-3 py-2 mb-3 border ${borderClass}">
+                <div class="flex items-center gap-2 text-sm">${icon}<span class="text-claude-text">${escapeHtml(summary.headline)}</span></div>
+            </div>`;
+        }
+        case 'EnterPlanMode':
+        case 'ExitPlanMode': {
+            const emoji = tc.tool_name === 'EnterPlanMode' ? '📋' : '✅';
+            return `<div class="tier-prominent rounded px-3 py-1.5 mb-3 border border-purple-400/20 bg-purple-950/10 text-xs text-purple-300/80 flex items-center gap-2">
+                <span>${emoji}</span><span>${escapeHtml(summary.headline)}</span>
+            </div>`;
+        }
+        case 'Skill':
+            return `<div class="tier-prominent rounded-lg px-3 py-2 mb-3 border border-purple-400/20 bg-purple-950/20">
+                <div class="flex items-center gap-2"><span class="tool-badge-purple text-xs px-1.5 py-0.5 rounded font-bold">Skill</span><span class="text-sm text-claude-text">/${escapeHtml(summary.headline)}</span></div>
+            </div>`;
+        default: return '';
+    }
+}
+
+function renderNotableGroup(tools) {
+    if (!tools.length) return '';
+    const items = tools.map(tc => {
+        const summary = getToolSummary(tc);
+        const monoClass = ['Bash','Write','Edit','NotebookEdit'].includes(tc.tool_name) ? 'font-mono' : '';
+        const statusHtml = summary.status === 'error'
+            ? '<span class="text-red-400 ml-auto shrink-0">error</span>'
+            : summary.status === 'ok' ? '<span class="text-green-400/60 ml-auto shrink-0">✓</span>' : '';
+        return `<details class="notable-tool-card rounded border border-claude-border/50 bg-claude-card/50">
+            <summary class="cursor-pointer flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-claude-card/80 transition-colors">
+                <span class="tool-badge-${tc.tool_name.toLowerCase()} px-1.5 py-0.5 rounded font-bold text-[10px]">${escapeHtml(tc.tool_name)}</span>
+                <span class="text-claude-muted truncate max-w-lg ${monoClass}">${escapeHtml(summary.headline)}</span>
+                ${statusHtml}
+            </summary>
+            <div class="px-3 pb-2 pt-1 border-t border-claude-border/30 space-y-1">${renderToolInputOutput(tc)}</div>
+        </details>`;
+    }).join('');
+    return `<div class="tier-notable-group space-y-1 mb-3">${items}</div>`;
+}
+
+function renderRoutineGroup(tools) {
+    if (!tools.length) return '';
+    const counts = {};
+    tools.forEach(tc => { counts[tc.tool_name] = (counts[tc.tool_name] || 0) + 1; });
+    const countStr = Object.entries(counts).map(([n, c]) => `${c} ${n}`).join(', ');
+    const items = tools.map(tc => {
+        const summary = getToolSummary(tc);
+        const statusHtml = summary.status === 'error' ? '<span class="text-red-400">error</span>' : '';
+        return `<details class="tool-block">
+            <summary class="cursor-pointer flex items-center gap-2 py-0.5 text-[11px]">
+                <span class="text-claude-muted/60 font-bold">${escapeHtml(tc.tool_name)}</span>
+                <span class="text-claude-muted/50 truncate max-w-lg font-mono">${escapeHtml(summary.headline)}</span>
+                ${statusHtml}
+            </summary>
+            <div class="mt-1 pl-3 border-l border-claude-border/20 space-y-1">${renderToolInputOutput(tc)}</div>
+        </details>`;
+    }).join('');
+    const s = tools.length > 1 ? 's' : '';
+    return `<details class="routine-tools-group mb-2">
+        <summary class="cursor-pointer text-xs text-claude-muted/70 hover:text-claude-muted transition-colors py-1 flex items-center gap-1">
+            <span>Explored ${tools.length} item${s}</span>
+            <span class="text-claude-muted/40">(${countStr})</span>
+        </summary>
+        <div class="mt-1 pl-3 border-l border-claude-border/30 space-y-1">${items}</div>
+    </details>`;
+}
+
+function buildSummaryBadges(toolCalls) {
+    let hasAsk = false, hasTaskCreate = false, hasTaskDone = false, hasPlan = false;
+    let writeCount = 0, bashCount = 0, routineCount = 0;
+    (toolCalls || []).forEach(tc => {
+        if (tc.tool_name === 'AskUserQuestion') hasAsk = true;
+        if (tc.tool_name === 'TaskCreate') hasTaskCreate = true;
+        if (tc.tool_name === 'TaskUpdate' && tc.tool_input?.status === 'completed') hasTaskDone = true;
+        if (tc.tool_name === 'EnterPlanMode' || tc.tool_name === 'ExitPlanMode') hasPlan = true;
+        if (['Write','Edit','NotebookEdit'].includes(tc.tool_name)) writeCount++;
+        if (tc.tool_name === 'Bash') bashCount++;
+        if (getToolTier(tc.tool_name) === 'routine') routineCount++;
+    });
+    let badges = '';
+    if (hasAsk) badges += '<span class="text-[10px] text-blue-300/80 bg-blue-900/30 px-1.5 py-0.5 rounded">asked you</span>';
+    if (hasTaskCreate) badges += '<span class="text-[10px] text-green-300/80 bg-green-900/30 px-1.5 py-0.5 rounded">+ task</span>';
+    if (hasTaskDone) badges += '<span class="text-[10px] text-green-300/80 bg-green-900/30 px-1.5 py-0.5 rounded">✓ task</span>';
+    if (hasPlan) badges += '<span class="text-[10px] text-purple-300/80 bg-purple-900/30 px-1.5 py-0.5 rounded">plan mode</span>';
+    if (writeCount) badges += `<span class="text-[10px] text-yellow-300/80 bg-yellow-900/30 px-1.5 py-0.5 rounded">${writeCount} file${writeCount > 1 ? 's' : ''}</span>`;
+    if (bashCount) badges += `<span class="text-[10px] text-blue-300/80 bg-blue-900/30 px-1.5 py-0.5 rounded">${bashCount} cmd${bashCount > 1 ? 's' : ''}</span>`;
+    if (routineCount) badges += `<span class="text-[10px] text-claude-muted/60">${routineCount} read${routineCount > 1 ? 's' : ''}</span>`;
+    return badges;
+}
+
 function createTurnElement(turn, isSubagent = false) {
     const div = document.createElement('div');
     div.className = 'flex justify-start' + (isSubagent ? ' ml-4' : '');
@@ -345,89 +610,17 @@ function createTurnElement(turn, isSubagent = false) {
                 </details>`;
         }
 
-        // Separate interactive and regular tool calls
-        const interactiveCalls = (turn.tool_calls || []).filter(tc => tc.is_interactive);
-        const regularCalls = (turn.tool_calls || []).filter(tc => !tc.is_interactive);
+        // Group tool calls by tier (use pre-computed lists or compute from tool_calls)
+        const prominent = turn.prominent_tools || (turn.tool_calls || []).filter(tc => getToolTier(tc.tool_name) === 'prominent');
+        const notable = turn.notable_tools || (turn.tool_calls || []).filter(tc => getToolTier(tc.tool_name) === 'notable');
+        const routine = turn.routine_tools || (turn.tool_calls || []).filter(tc => getToolTier(tc.tool_name) === 'routine');
 
-        // Interactive tool calls (AskUserQuestion) — always visible
-        let interactiveHtml = interactiveCalls.map(tc => {
-            let questionsHtml = '';
-            if (tc.tool_input && tc.tool_input.questions) {
-                questionsHtml = tc.tool_input.questions.map(q => {
-                    const optionsHtml = (q.options || []).map(opt =>
-                        `<span class="text-xs bg-blue-900/30 text-blue-200/80 px-2 py-0.5 rounded border border-blue-500/20">${escapeHtml(opt.label)}</span>`
-                    ).join('');
-                    return `<div class="mb-2">
-                        <div class="text-sm text-claude-text">${escapeHtml(q.question)}</div>
-                        ${optionsHtml ? `<div class="flex flex-wrap gap-1.5 mt-1.5">${optionsHtml}</div>` : ''}
-                    </div>`;
-                }).join('');
-            }
-            const answerHtml = tc.tool_result
-                ? `<div class="mt-2 pt-2 border-t border-blue-400/20">
-                    <span class="text-xs text-green-400 font-bold">Answer:</span>
-                    <span class="text-sm text-claude-text ml-1">${escapeHtml(tc.tool_result.text)}</span>
-                   </div>`
-                : '';
-            return `<div class="rounded-lg p-3 mb-3 border border-blue-400/20 bg-blue-950/20">
-                <div class="text-xs text-blue-300 font-bold mb-2">Asked you</div>
-                ${questionsHtml}
-                ${answerHtml}
-            </div>`;
-        }).join('');
-
-        // Regular tool calls (collapsed)
-        let toolsHtml = '';
-        if (regularCalls.length) {
-            const toolItems = regularCalls.map(tc => {
-                const desc = tc.tool_input.description || tc.tool_input.command?.slice(0, 100)
-                    || tc.tool_input.pattern || tc.tool_input.file_path || tc.tool_input.query
-                    || tc.tool_input.prompt?.slice(0, 80) || '';
-                const statusBadge = tc.tool_result
-                    ? (tc.tool_result.is_error
-                        ? '<span class="text-claude-red">error</span>'
-                        : '<span class="text-claude-green">ok</span>')
-                    : '';
-                const resultHtml = tc.tool_result
-                    ? `<details class="leaf-block">
-                        <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Output${tc.tool_result.is_error ? ' <span class="text-claude-red">(error)</span>' : ''}</summary>
-                        <pre class="tool-output rounded p-2 overflow-x-auto text-[11px] max-h-64 overflow-y-auto mt-1 ${tc.tool_result.is_error ? 'border-l-2 border-claude-red' : ''}">${escapeHtml(tc.tool_result.text)}</pre>
-                       </details>`
-                    : '';
-                const inputJson = JSON.stringify(tc.tool_input, null, 2);
-                return `
-                    <details class="tool-block">
-                        <summary class="cursor-pointer flex items-center gap-2 py-1 text-xs">
-                            <span class="tool-badge px-1.5 py-0.5 rounded font-bold">${escapeHtml(tc.tool_name)}</span>
-                            <span class="text-claude-muted truncate max-w-lg">${escapeHtml(desc)}</span>
-                            ${statusBadge}
-                        </summary>
-                        <div class="mt-1 pl-3 border-l border-claude-border/50 space-y-1">
-                            <details class="leaf-block">
-                                <summary class="cursor-pointer text-[11px] text-claude-muted hover:text-claude-accent transition-colors">Input</summary>
-                                <pre class="bg-claude-bg rounded p-2 overflow-x-auto text-[11px] max-h-48 overflow-y-auto mt-1"><code class="language-json">${escapeHtml(inputJson)}</code></pre>
-                            </details>
-                            ${resultHtml}
-                        </div>
-                    </details>`;
-            }).join('');
-
-            const uniqueTools = [...new Set(regularCalls.map(tc => tc.tool_name))];
-            const badges = uniqueTools.map(n => `<span class="tool-badge px-1.5 py-0 rounded text-[10px]">${escapeHtml(n)}</span>`).join('');
-
-            toolsHtml = `
-                <details class="tool-calls-group mb-2">
-                    <summary class="cursor-pointer text-xs text-claude-blue hover:text-claude-accent transition-colors py-1 flex items-center gap-2">
-                        <span>Tool calls (${regularCalls.length})</span>
-                        <span class="flex gap-1">${badges}</span>
-                    </summary>
-                    <div class="mt-2 pl-3 border-l-2 border-claude-border space-y-2">${toolItems}</div>
-                </details>`;
-        }
+        const prominentHtml = prominent.map(tc => renderProminent(tc)).join('');
+        const notableHtml = renderNotableGroup(notable);
+        const routineHtml = renderRoutineGroup(routine);
 
         const textPreview = escapeHtml((turn.text_blocks && turn.text_blocks[0] || '').slice(0, 120));
-        const askedBadge = interactiveCalls.length ? '<span class="text-[10px] text-blue-300/80 bg-blue-900/30 px-1.5 py-0.5 rounded">asked you</span>' : '';
-        const toolCount = turn.tool_calls && turn.tool_calls.length ? `<span class="text-[10px] text-claude-blue/60">${turn.tool_calls.length} tools</span>` : '';
+        const summaryBadges = buildSummaryBadges(turn.tool_calls);
 
         div.innerHTML = `
             <details class="turn-block assistant-bubble rounded-lg w-full">
@@ -435,15 +628,16 @@ function createTurnElement(turn, isSubagent = false) {
                     ${checkbox}
                     <span class="text-xs text-claude-accent font-bold">Claude</span>
                     <span class="text-xs text-claude-muted/50">· ${formatTimestamp(turn.timestamp)}</span>
+                    ${turn.model ? `<span class="text-[10px] text-claude-muted/30">${escapeHtml(turn.model)}</span>` : ''}
                     <span class="text-xs text-claude-muted truncate max-w-xl">${textPreview}</span>
-                    ${askedBadge}
-                    ${toolCount}
+                    ${summaryBadges}
                 </summary>
                 <div class="px-4 pb-3">
                     ${textHtml}
-                    ${interactiveHtml}
+                    ${prominentHtml}
+                    ${notableHtml}
+                    ${routineHtml}
                     ${thinkingHtml}
-                    ${toolsHtml}
                 </div>
             </details>`;
     }

@@ -17,6 +17,107 @@ from claude_archive.storage.manager import StorageManager
 # Tool names that represent interactive user interactions (shown prominently)
 _INTERACTIVE_TOOLS = {"AskUserQuestion"}
 
+# --- Tiered tool display ---
+_TIER_PROMINENT = "prominent"
+_TIER_NOTABLE = "notable"
+_TIER_ROUTINE = "routine"
+
+_TOOL_TIERS: dict[str, str] = {
+    # Tier 1: Prominent — always visible, styled cards
+    "AskUserQuestion": _TIER_PROMINENT,
+    "TaskCreate": _TIER_PROMINENT,
+    "TaskUpdate": _TIER_PROMINENT,
+    "EnterPlanMode": _TIER_PROMINENT,
+    "ExitPlanMode": _TIER_PROMINENT,
+    "Skill": _TIER_PROMINENT,
+    # Tier 2: Notable — compact inline, always visible, expandable
+    "Bash": _TIER_NOTABLE,
+    "Write": _TIER_NOTABLE,
+    "Edit": _TIER_NOTABLE,
+    "WebSearch": _TIER_NOTABLE,
+    "WebFetch": _TIER_NOTABLE,
+    "Task": _TIER_NOTABLE,
+    "NotebookEdit": _TIER_NOTABLE,
+    # Tier 3: Routine — collapsed summary group
+    "Read": _TIER_ROUTINE,
+    "Glob": _TIER_ROUTINE,
+    "Grep": _TIER_ROUTINE,
+    "TaskList": _TIER_ROUTINE,
+    "TaskGet": _TIER_ROUTINE,
+    "EnterWorktree": _TIER_ROUTINE,
+}
+
+
+def _short_path(path: str, max_parts: int = 3) -> str:
+    """Truncate a file path to the last N segments, with leading ellipsis."""
+    if not path:
+        return ""
+    parts = path.strip("/").split("/")
+    if len(parts) <= max_parts:
+        return path
+    return "…/" + "/".join(parts[-max_parts:])
+
+
+def _tool_display_summary(
+    tool_name: str, tool_input: dict, tool_result: dict | None
+) -> dict:
+    """Return {headline, detail, status} for compact tool rendering."""
+    headline = ""
+    detail = ""
+    status = ""
+
+    if tool_result:
+        status = "error" if tool_result.get("is_error") else "ok"
+
+    if tool_name == "AskUserQuestion":
+        questions = tool_input.get("questions", [])
+        if questions:
+            headline = questions[0].get("question", "")[:120]
+    elif tool_name == "TaskCreate":
+        headline = tool_input.get("subject", "")
+        detail = tool_input.get("description", "")[:200]
+    elif tool_name == "TaskUpdate":
+        new_status = tool_input.get("status", "")
+        subject = tool_input.get("subject", "")
+        task_id = tool_input.get("taskId", "")
+        if new_status == "completed":
+            headline = f"✓ #{task_id} {subject}" if subject else f"✓ #{task_id} completed"
+        elif new_status == "in_progress":
+            headline = f"▶ #{task_id} {subject}" if subject else f"▶ #{task_id} in progress"
+        else:
+            headline = f"#{task_id} → {new_status}" if new_status else f"#{task_id} updated"
+    elif tool_name == "EnterPlanMode":
+        headline = "Entering plan mode"
+    elif tool_name == "ExitPlanMode":
+        headline = "Exiting plan mode"
+    elif tool_name == "Skill":
+        headline = tool_input.get("skill", "")
+    elif tool_name == "Bash":
+        headline = tool_input.get("description") or (tool_input.get("command", "")[:100])
+    elif tool_name == "Write":
+        headline = _short_path(tool_input.get("file_path", ""))
+    elif tool_name == "Edit":
+        headline = _short_path(tool_input.get("file_path", ""))
+    elif tool_name == "NotebookEdit":
+        headline = _short_path(tool_input.get("notebook_path", ""))
+    elif tool_name == "WebSearch":
+        headline = tool_input.get("query", "")
+    elif tool_name == "WebFetch":
+        headline = tool_input.get("url", "")[:100]
+    elif tool_name == "Task":
+        headline = tool_input.get("description", "")
+    elif tool_name == "Read":
+        headline = _short_path(tool_input.get("file_path", ""))
+    elif tool_name == "Glob":
+        headline = tool_input.get("pattern", "")
+    elif tool_name == "Grep":
+        headline = tool_input.get("pattern", "")
+    else:
+        # Fallback for unknown tools
+        headline = tool_input.get("description", "") or tool_input.get("command", "")[:100] if tool_input.get("command") else ""
+
+    return {"headline": headline, "detail": detail, "status": status}
+
 
 @dataclass
 class ProjectInfo:
@@ -260,6 +361,19 @@ def _messages_to_turns(
         has_tools = bool(current_assistant["tool_calls"])
         has_thinking = bool(current_assistant["thinking_blocks"])
         if has_text or has_tools or has_thinking:
+            # Pre-group tool calls by display tier
+            current_assistant["prominent_tools"] = [
+                tc for tc in current_assistant["tool_calls"]
+                if tc.get("display_tier") == _TIER_PROMINENT
+            ]
+            current_assistant["notable_tools"] = [
+                tc for tc in current_assistant["tool_calls"]
+                if tc.get("display_tier") == _TIER_NOTABLE
+            ]
+            current_assistant["routine_tools"] = [
+                tc for tc in current_assistant["tool_calls"]
+                if tc.get("display_tier") == _TIER_ROUTINE
+            ]
             turns.append(current_assistant)
         current_assistant = None
 
@@ -326,15 +440,19 @@ def _messages_to_turns(
                 elif block.block_type == "thinking" and block.text.strip():
                     current_assistant["thinking_blocks"].append(block.text)
                 elif block.block_type == "tool_use":
+                    result = tool_results.get(block.tool_id)
+                    tier = _TOOL_TIERS.get(block.tool_name, _TIER_ROUTINE)
                     tool_call = {
                         "tool_name": block.tool_name,
                         "tool_id": block.tool_id,
                         "tool_input": block.tool_input,
-                        "tool_result": None,
+                        "tool_result": result,
                         "is_interactive": block.tool_name in _INTERACTIVE_TOOLS,
+                        "display_tier": tier,
+                        "display_summary": _tool_display_summary(
+                            block.tool_name, block.tool_input, result
+                        ),
                     }
-                    if block.tool_id in tool_results:
-                        tool_call["tool_result"] = tool_results[block.tool_id]
                     current_assistant["tool_calls"].append(tool_call)
 
             # Update model/usage if newer
