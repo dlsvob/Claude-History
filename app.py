@@ -213,6 +213,12 @@ if _claude_data_dir or _claude_archive_dir:
         ),
     )
     _default_archive = bridge.ArchiveBridge(config=_config)
+else:
+    # Local dev: use default ~/.claude/ + ~/claude-archive/ if they exist
+    _local_claude = Path.home() / ".claude"
+    _local_archive_dir = Path.home() / "claude-archive"
+    if _local_claude.exists() or _local_archive_dir.exists():
+        _default_archive = bridge.ArchiveBridge()
 
 
 def get_archive() -> bridge.ArchiveBridge | None:

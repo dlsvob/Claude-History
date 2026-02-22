@@ -14,6 +14,9 @@ from claude_archive.config import Config, load_config
 from claude_archive.models import Message, Session
 from claude_archive.storage.manager import StorageManager
 
+# Tool names that represent interactive user interactions (shown prominently)
+_INTERACTIVE_TOOLS = {"AskUserQuestion"}
+
 
 @dataclass
 class ProjectInfo:
@@ -154,8 +157,9 @@ class ArchiveBridge:
         """
         messages = self.manager.get_messages(session_id)
 
-        # Build tool_result lookup from user messages
+        # Build tool_result lookup from user messages and tool_id→info from assistant messages
         tool_results: dict[str, dict] = {}
+        tool_id_to_info: dict[str, dict] = {}
         for msg in messages:
             if msg.message_type == "user":
                 for block in msg.content_blocks:
@@ -164,8 +168,15 @@ class ArchiveBridge:
                             "text": block.text,
                             "is_error": block.is_error,
                         }
+            elif msg.message_type == "assistant":
+                for block in msg.content_blocks:
+                    if block.block_type == "tool_use" and block.tool_id:
+                        tool_id_to_info[block.tool_id] = {
+                            "tool_name": block.tool_name,
+                            "tool_input": block.tool_input,
+                        }
 
-        turns = _messages_to_turns(messages, tool_results)
+        turns = _messages_to_turns(messages, tool_results, tool_id_to_info)
 
         if offset:
             turns = turns[offset:]
@@ -227,7 +238,9 @@ class ArchiveBridge:
         )
 
 
-def _messages_to_turns(messages: list[Message], tool_results: dict) -> list[dict]:
+def _messages_to_turns(
+    messages: list[Message], tool_results: dict, tool_id_to_info: dict
+) -> list[dict]:
     """Convert messages into conversation turns grouped as exchanges.
 
     Groups all assistant messages between two user messages into a single
@@ -277,8 +290,24 @@ def _messages_to_turns(messages: list[Message], tool_results: dict) -> list[dict
                 if text_parts:
                     user_text = "\n".join(text_parts)
 
+            # Check for interactive tool responses (e.g., AskUserQuestion)
+            if not user_text:
+                for block in msg.content_blocks:
+                    if block.block_type == "tool_result" and block.tool_id:
+                        info = tool_id_to_info.get(block.tool_id, {})
+                        if info.get("tool_name") in _INTERACTIVE_TOOLS:
+                            flush_assistant()
+                            turns.append({
+                                "type": "user",
+                                "text": block.text or "(no response)",
+                                "timestamp": msg.timestamp,
+                                "uuid": msg.uuid,
+                                "is_tool_response": True,
+                            })
+                            break
+
             # Filter out system messages and tool-result-only messages
-            if (user_text and not user_text.startswith("[Request interrupted by user")
+            elif (not user_text.startswith("[Request interrupted by user")
                     and not user_text.startswith("<")):
                 flush_assistant()
                 turns.append({
@@ -302,6 +331,7 @@ def _messages_to_turns(messages: list[Message], tool_results: dict) -> list[dict
                         "tool_id": block.tool_id,
                         "tool_input": block.tool_input,
                         "tool_result": None,
+                        "is_interactive": block.tool_name in _INTERACTIVE_TOOLS,
                     }
                     if block.tool_id in tool_results:
                         tool_call["tool_result"] = tool_results[block.tool_id]
