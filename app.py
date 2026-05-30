@@ -9,6 +9,7 @@ import re
 import secrets
 import threading
 import uuid
+import webbrowser
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, flash
 from docx import Document
@@ -603,4 +604,11 @@ def disconnect():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    
+    # Open browser after a brief delay so the server can start.
+    # Skipped when NO_BROWSER=1 (e.g. running as a systemd service).
+    if os.environ.get("NO_BROWSER") != "1":
+        url = f"http://localhost:{port}"
+        threading.Timer(1.5, webbrowser.open, args=[url]).start()
+    
     app.run(debug=debug, host="0.0.0.0", port=port)
