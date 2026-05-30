@@ -136,6 +136,17 @@
         </main>
     </div>
 
+    <!-- Modal overlay for expanded text card reading -->
+    <div id="text-modal" class="text-modal-overlay hidden" onclick="closeTextModal(event)">
+        <div class="text-modal-container" onclick="event.stopPropagation()">
+            <div class="text-modal-header">
+                <span id="text-modal-label" class="text-modal-label"></span>
+                <button onclick="closeTextModal()" class="text-modal-close" aria-label="Close modal">&times;</button>
+            </div>
+            <div id="text-modal-body" class="text-modal-body assistant-text"></div>
+        </div>
+    </div>
+
     <script src="/static/app.js"></script>
 </body>
 </html>
